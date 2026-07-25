@@ -4,9 +4,12 @@ import {
   Home, Dumbbell, Layers, User, Plus, Minus, Check, ChevronLeft, ChevronRight,
   Search, X, TrendingDown, ArrowUp, ArrowRight, ArrowDown, Zap, Activity, Moon,
   Play, Pause, Square, Trash2, RotateCcw, BarChart3, Clock, Pencil, Target, Calendar,
-  Info, ChevronUp, ChevronDown,
+  Info, GripVertical,
 } from "lucide-react";
 import EXERCISES_DATA from "./data/exercises.json";
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
+import { CSS as DndCSS } from "@dnd-kit/utilities";
 
 /* ===== TOKENS ===== */
 const C = {
@@ -98,6 +101,10 @@ const cap = (s) => (s || "").replace(/\b\w/g, (c) => c.toUpperCase());
 const exName = (id) => EXERCISE_MAP.get(id)?.name || id;
 const exMuscle = (id) => EXERCISE_MAP.get(id)?.bodyPart || "";
 const isBW = (id) => EXERCISE_MAP.get(id)?.equipment === "body weight";
+const exFull = (id) => EXERCISE_MAP.get(id);
+const dayIdCache = new WeakMap();
+let dayIdSeq = 0;
+const dayKey = (d) => { if (!dayIdCache.has(d)) dayIdCache.set(d, `day-${dayIdSeq++}`); return dayIdCache.get(d); };
 const N = (sets) => ({ id: null, sets, last: { w: 0, reps: 10, rir: "amber", logged: false } });
 const ex = (id, sets) => ({ ...N(sets), id });
 
@@ -254,13 +261,18 @@ function ConfirmPanel({ title, body, slideLabel, color = C.red, onConfirm, onCan
   );
 }
 
-const rchip = { width: 27, height: 20, borderRadius: 6, border: `1px solid ${C.line}`, background: C.card, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, WebkitTapHighlightColor: "transparent" };
-const Reorder = ({ onUp, onDown, upDis, downDis }) => (
-  <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
-    <button onClick={upDis ? undefined : onUp} style={{ ...rchip, opacity: upDis ? 0.3 : 1 }}><ChevronUp size={13} strokeWidth={2.6} color={C.sub} /></button>
-    <button onClick={downDis ? undefined : onDown} style={{ ...rchip, opacity: downDis ? 0.3 : 1 }}><ChevronDown size={13} strokeWidth={2.6} color={C.sub} /></button>
-  </div>
-);
+const dragHandle = { width: 30, height: 30, borderRadius: 9, border: "none", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "grab", touchAction: "none", flexShrink: 0, WebkitTapHighlightColor: "transparent" };
+function DragHandle({ attributes, listeners }) {
+  return <button {...attributes} {...listeners} style={dragHandle}><GripVertical size={16} color={C.faint} /></button>;
+}
+function Sortable({ id, children }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  return (
+    <div ref={setNodeRef} style={{ transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}>
+      {children({ attributes, listeners })}
+    </div>
+  );
+}
 function InfoModal({ styleKey, onClose }) {
   const info = STYLE_INFO[styleKey] || STYLE_INFO.custom;
   const L = ({ children }) => <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.2, color: C.faint, marginBottom: 5 }}>{children}</div>;
@@ -616,6 +628,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
   const [savedCount, setSavedCount] = useState(0);
   const [finishedIdx, setFinishedIdx] = useState(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [detail, setDetail] = useState(null);
   useEffect(() => { if (!live && (phase === "active" || phase === "review")) setPhase("schedule"); }, [live, phase]);
 
   if (!active) return (<div style={{ padding: "6px 18px 24px" }}><PageTitle sub="Workout">This week</PageTitle><Card style={{ padding: 30, textAlign: "center" }}><div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink }}>No active program</div><div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, margin: "6px 0 18px", lineHeight: 1.5 }}>Start a program on the Programs tab, then your week appears here.</div><BigButton tone="acc" onClick={() => go("programs")}>Go to Programs</BigButton></Card></div>);
@@ -807,8 +820,8 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
         return (
           <Card key={ei} style={{ padding: 16, marginBottom: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 12 }}>
-              <div style={{ width: 40, height: 40, borderRadius: 11, background: C.page, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Dumbbell size={19} color={C.sub} /></div>
-              <div style={{ flex: 1 }}><div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink }}>{exName(exx.id)}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 1 }}>{exMuscle(exx.id).toUpperCase()}</div></div>
+              <ExerciseThumb exercise={exFull(exx.id)} onOpen={setDetail} />
+              <div onClick={() => setDetail(exFull(exx.id))} style={{ flex: 1, cursor: "pointer" }}><div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink }}>{exName(exx.id)}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 1 }}>{exMuscle(exx.id).toUpperCase()}</div></div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.page, borderRadius: 10, padding: "9px 12px", marginBottom: 12 }}>
               <Arrow size={15} color={dirColor} strokeWidth={2.6} />
@@ -853,6 +866,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
       ) : (
         <button onClick={() => setConfirmDiscard(true)} style={{ width: "100%", height: 48, borderRadius: 13, border: `1.5px solid ${C.line}`, background: C.card, color: C.red, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7, WebkitTapHighlightColor: "transparent" }}><Trash2 size={15} /> Discard workout</button>
       )}
+      {detail && <ExerciseDetail exercise={detail} onClose={() => setDetail(null)} />}
     </div>
   );
 }
@@ -903,6 +917,8 @@ function ProgramDetail({ program, onBack, onChange, onDelete, onStart, onPause, 
   const [pending, setPending] = useState(null); // 'pause'|'stop'|'restart'|'delete'
   const [info, setInfo] = useState(false);
   const [pickDays, setPickDays] = useState(program.scheduleDays?.length ? program.scheduleDays : (DEFAULT_DAYS[Math.min(7, Math.max(1, program.days.length || 3))] || [1, 3, 5]));
+  const [detail, setDetail] = useState(null);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const days = program.days;
   const paused = isPaused(program);
   const weeks = program.weeks || 12;
@@ -915,8 +931,19 @@ function ProgramDetail({ program, onBack, onChange, onDelete, onStart, onPause, 
   const setSets = (di, id, n) => onChange({ ...program, days: days.map((d, i) => i === di ? { ...d, ex: d.ex.map((e) => e.id === id ? { ...e, sets: Math.max(1, Math.min(8, n)) } : e) } : d) });
   const toggleEx = (di, id) => { const d = days[di]; const has = d.ex.some((e) => e.id === id); onChange({ ...program, days: days.map((x, i) => i === di ? { ...x, ex: has ? x.ex.filter((e) => e.id !== id) : [...x.ex, ex(id, 3)] } : x) }); };
   const toggleDay = (wd) => setPickDays((s) => s.includes(wd) ? s.filter((x) => x !== wd) : [...s, wd].sort());
-  const moveDay = (di, dir) => { const j = di + dir; if (j < 0 || j >= days.length) return; const nd = [...days]; [nd[di], nd[j]] = [nd[j], nd[di]]; onChange({ ...program, days: nd }); };
-  const moveEx = (di, ei, dir) => { const d = days[di]; const j = ei + dir; if (j < 0 || j >= d.ex.length) return; const ne = [...d.ex]; [ne[ei], ne[j]] = [ne[j], ne[ei]]; onChange({ ...program, days: days.map((x, i) => i === di ? { ...x, ex: ne } : x) }); };
+  const handleDayDragEnd = ({ active, over }) => {
+    if (!over || active.id === over.id) return;
+    const oldIndex = days.findIndex((d) => dayKey(d) === active.id);
+    const newIndex = days.findIndex((d) => dayKey(d) === over.id);
+    onChange({ ...program, days: arrayMove(days, oldIndex, newIndex) });
+  };
+  const handleExDragEnd = (di) => ({ active, over }) => {
+    if (!over || active.id === over.id) return;
+    const d = days[di];
+    const oldIndex = d.ex.findIndex((e) => e.id === active.id);
+    const newIndex = d.ex.findIndex((e) => e.id === over.id);
+    onChange({ ...program, days: days.map((x, i) => i === di ? { ...x, ex: arrayMove(x.ex, oldIndex, newIndex) } : x) });
+  };
 
   if (picker != null) return <Picker inDay={days[picker].ex.map((e) => e.id)} onToggle={(id) => toggleEx(picker, id)} onBack={() => setPicker(null)} dayName={days[picker].name} />;
 
@@ -968,28 +995,48 @@ function ProgramDetail({ program, onBack, onChange, onDelete, onStart, onPause, 
       {!program.active && <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "0 2px", margin: "0 0 12px" }}><span style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub }}>Set up your training days below, then hit <b style={{ color: C.ink }}>Start</b> at the bottom.</span></div>}
 
       {days.length === 0 && <Card style={{ padding: 26, textAlign: "center", marginBottom: 12 }}><div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 600, color: C.ink }}>No training days yet</div><div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, marginTop: 6 }}>Add a day, then fill it with exercises.</div></Card>}
-      {days.map((d, di) => (
-        <Card key={di} style={{ padding: 16, marginBottom: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: d.ex.length ? 12 : 8 }}>
-            <Reorder onUp={() => moveDay(di, -1)} onDown={() => moveDay(di, 1)} upDis={di === 0} downDis={di === days.length - 1} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: 1.2, color: ACC, fontWeight: 600 }}>WORKOUT {WLETTER[di] || di + 1}</div>
-              <input value={d.name} onChange={(e) => renameDay(di, e.target.value)} style={{ width: "100%", fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink, border: "none", outline: "none", background: "transparent", marginTop: 2 }} />
-            </div>
-            <button onClick={() => removeDay(di)} style={{ ...miniRound, width: 30, height: 30 }}><Trash2 size={15} color={C.sub} /></button>
-          </div>
-          {d.ex.map((e, ei) => (
-            <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderTop: `1px solid ${C.lineSoft}`, flexWrap: "wrap" }}>
-              <Reorder onUp={() => moveEx(di, ei, -1)} onDown={() => moveEx(di, ei, 1)} upDis={ei === 0} downDis={ei === d.ex.length - 1} />
-              <div style={{ flex: 1, minWidth: 120 }}><div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 550, color: C.ink }}>{exName(e.id)}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 2 }}>{exMuscle(e.id).toUpperCase()}</div></div>
-              <div style={{ display: "flex", alignItems: "center", gap: 5 }}><button onClick={() => setSets(di, e.id, e.sets - 1)} style={{ ...miniRound, width: 27, height: 27 }}><Minus size={13} strokeWidth={2.5} /></button><span style={{ fontFamily: MONO, fontSize: 12, color: C.ink, minWidth: 42, textAlign: "center" }}>{e.sets} set{e.sets !== 1 ? "s" : ""}</span><button onClick={() => setSets(di, e.id, e.sets + 1)} style={{ ...miniRound, width: 27, height: 27 }}><Plus size={13} strokeWidth={2.5} /></button></div>
-              <button onClick={() => removeEx(di, e.id)} style={{ ...miniRound, width: 30, height: 30 }}><X size={15} color={C.sub} /></button>
-            </div>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDayDragEnd}>
+        <SortableContext items={days.map(dayKey)} strategy={verticalListSortingStrategy}>
+          {days.map((d, di) => (
+            <Sortable key={dayKey(d)} id={dayKey(d)}>
+              {({ attributes, listeners }) => (
+                <Card style={{ padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: d.ex.length ? 12 : 8 }}>
+                    <DragHandle attributes={attributes} listeners={listeners} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: 1.2, color: ACC, fontWeight: 600 }}>WORKOUT {WLETTER[di] || di + 1}</div>
+                      <input value={d.name} onChange={(e) => renameDay(di, e.target.value)} style={{ width: "100%", fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink, border: "none", outline: "none", background: "transparent", marginTop: 2 }} />
+                    </div>
+                    <button onClick={() => removeDay(di)} style={{ ...miniRound, width: 30, height: 30 }}><Trash2 size={15} color={C.sub} /></button>
+                  </div>
+                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleExDragEnd(di)}>
+                    <SortableContext items={d.ex.map((e) => e.id)} strategy={verticalListSortingStrategy}>
+                      {d.ex.map((e, ei) => {
+                        const full = exFull(e.id);
+                        return (
+                          <Sortable key={e.id} id={e.id}>
+                            {({ attributes, listeners }) => (
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderTop: `1px solid ${C.lineSoft}`, flexWrap: "wrap" }}>
+                                <DragHandle attributes={attributes} listeners={listeners} />
+                                <ExerciseThumb exercise={full} onOpen={setDetail} size={36} />
+                                <div onClick={() => setDetail(full)} style={{ flex: 1, minWidth: 100, cursor: "pointer" }}><div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 550, color: C.ink }}>{full.name}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 2 }}>{full.bodyPart.toUpperCase()}</div></div>
+                                <div style={{ display: "flex", alignItems: "center", gap: 5 }}><button onClick={() => setSets(di, e.id, e.sets - 1)} style={{ ...miniRound, width: 27, height: 27 }}><Minus size={13} strokeWidth={2.5} /></button><span style={{ fontFamily: MONO, fontSize: 12, color: C.ink, minWidth: 42, textAlign: "center" }}>{e.sets} set{e.sets !== 1 ? "s" : ""}</span><button onClick={() => setSets(di, e.id, e.sets + 1)} style={{ ...miniRound, width: 27, height: 27 }}><Plus size={13} strokeWidth={2.5} /></button></div>
+                                <button onClick={() => removeEx(di, e.id)} style={{ ...miniRound, width: 30, height: 30 }}><X size={15} color={C.sub} /></button>
+                              </div>
+                            )}
+                          </Sortable>
+                        );
+                      })}
+                    </SortableContext>
+                  </DndContext>
+                  <button onClick={() => setPicker(di)} style={{ width: "100%", height: 46, borderRadius: 11, border: `1.5px dashed ${C.line}`, background: C.card, color: ACC, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: d.ex.length ? 12 : 0, WebkitTapHighlightColor: "transparent" }}><Plus size={16} strokeWidth={2.5} /> Add exercise</button>
+                </Card>
+              )}
+            </Sortable>
           ))}
-          <button onClick={() => setPicker(di)} style={{ width: "100%", height: 46, borderRadius: 11, border: `1.5px dashed ${C.line}`, background: C.card, color: ACC, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: d.ex.length ? 12 : 0, WebkitTapHighlightColor: "transparent" }}><Plus size={16} strokeWidth={2.5} /> Add exercise</button>
-        </Card>
-      ))}
-      {days.length > 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.faint, padding: "0 4px", margin: "0 0 12px", lineHeight: 1.5 }}>Use the ↑↓ arrows to reorder days and exercises. You'll train Day 1 → Day 2 → … in order, one per training day you pick when you start.</div>}
+        </SortableContext>
+      </DndContext>
+      {days.length > 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.faint, padding: "0 4px", margin: "0 0 12px", lineHeight: 1.5 }}>Drag the handle to reorder days and exercises. You'll train Day 1 → Day 2 → … in order, one per training day you pick when you start.</div>}
       <button onClick={addDay} style={{ width: "100%", height: 54, borderRadius: 13, border: "none", background: C.ink, color: "#fff", fontFamily: SANS, fontSize: 15, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 4, marginBottom: 18, WebkitTapHighlightColor: "transparent" }}><Plus size={18} strokeWidth={2.5} /> Add training day</button>
 
       {pending === "pause" && <ConfirmPanel title="Pause this program?" body="Your progress and stats stay intact — the week counter and consistency freeze until you resume. Ideal for a holiday." slideLabel="Slide to pause" color={C.amber} onConfirm={() => { onPause(); setPending(null); }} onCancel={() => setPending(null)} />}
@@ -1004,12 +1051,21 @@ function ProgramDetail({ program, onBack, onChange, onDelete, onStart, onPause, 
         <button onClick={() => setPending("delete")} style={{ width: "100%", height: 50, borderRadius: 13, border: `1.5px solid ${C.line}`, background: C.card, color: C.red, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7, WebkitTapHighlightColor: "transparent" }}><Trash2 size={15} /> Delete program</button>
       )}
       {info && <InfoModal styleKey={program.style || "custom"} onClose={() => setInfo(false)} />}
+      {detail && <ExerciseDetail exercise={detail} onClose={() => setDetail(null)} />}
     </div>
   );
 }
 
+function ExerciseThumb({ exercise, onOpen, size = 44 }) {
+  return (
+    <div onClick={(ev) => { ev.stopPropagation(); onOpen(exercise); }} style={{ position: "relative", width: size, height: size, flexShrink: 0, cursor: "pointer" }}>
+      {exercise.image ? <img src={exercise.image} alt="" loading="lazy" style={{ width: size, height: size, borderRadius: 9, objectFit: "cover", background: C.page, display: "block" }} /> : <div style={{ width: size, height: size, borderRadius: 9, background: C.page, display: "flex", alignItems: "center", justifyContent: "center" }}><Dumbbell size={size * 0.4} color={C.faint} /></div>}
+      {exercise.gif && <div style={{ position: "absolute", inset: 0, background: "rgba(18,20,26,0.28)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ width: 16, height: 16, borderRadius: 8, background: "rgba(255,255,255,0.92)", display: "flex", alignItems: "center", justifyContent: "center" }}><Play size={8} color={C.ink} fill={C.ink} /></div></div>}
+    </div>
+  );
+}
 function ExerciseDetail({ exercise, inDay, onToggle, onClose }) {
-  const on = inDay.includes(exercise.id);
+  const on = inDay?.includes(exercise.id);
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(10,12,16,0.55)", zIndex: 60, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "20px 20px 0 0", padding: "18px 20px 34px", maxHeight: "86vh", overflowY: "auto" }}>
@@ -1031,13 +1087,15 @@ function ExerciseDetail({ exercise, inDay, onToggle, onClose }) {
             </ol>
           </>
         )}
-        <div style={{ marginTop: 16 }}>
-          {on ? (
-            <BigButton tone="ghost" onClick={() => { onToggle(exercise.id); onClose(); }}>Remove from workout</BigButton>
-          ) : (
-            <BigButton tone="acc" onClick={() => { onToggle(exercise.id); onClose(); }}>Add to workout</BigButton>
-          )}
-        </div>
+        {onToggle && (
+          <div style={{ marginTop: 16 }}>
+            {on ? (
+              <BigButton tone="ghost" onClick={() => { onToggle(exercise.id); onClose(); }}>Remove from workout</BigButton>
+            ) : (
+              <BigButton tone="acc" onClick={() => { onToggle(exercise.id); onClose(); }}>Add to workout</BigButton>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1056,10 +1114,7 @@ function Picker({ inDay, onToggle, onBack, dayName }) {
       <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 16, paddingBottom: 2 }}>{EQUIP_OPTIONS.map((eq) => (<button key={eq} onClick={() => setEquip(eq)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${equip === eq ? C.ink : C.line}`, background: equip === eq ? C.ink : C.card, color: equip === eq ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{eq === "All" ? eq : cap(eq)}</button>))}</div>
       {filtered.map((e) => { const on = inDay.includes(e.id); return (
         <button key={e.id} onClick={() => onToggle(e.id)} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${on ? ACC : C.line}`, borderRadius: 13, padding: "10px 16px", marginBottom: 8, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
-          <div onClick={(ev) => { ev.stopPropagation(); setDetail(e); }} style={{ position: "relative", width: 44, height: 44, flexShrink: 0, cursor: "pointer" }}>
-            {e.image ? <img src={e.image} alt="" loading="lazy" style={{ width: 44, height: 44, borderRadius: 9, objectFit: "cover", background: C.page, display: "block" }} /> : <div style={{ width: 44, height: 44, borderRadius: 9, background: C.page, display: "flex", alignItems: "center", justifyContent: "center" }}><Dumbbell size={18} color={C.faint} /></div>}
-            {e.gif && <div style={{ position: "absolute", inset: 0, background: "rgba(18,20,26,0.28)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ width: 16, height: 16, borderRadius: 8, background: "rgba(255,255,255,0.92)", display: "flex", alignItems: "center", justifyContent: "center" }}><Play size={8} color={C.ink} fill={C.ink} /></div></div>}
-          </div>
+          <ExerciseThumb exercise={e} onOpen={setDetail} />
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 600, color: C.ink }}>{e.name}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 3 }}>{e.bodyPart.toUpperCase()} · {e.equipment.toUpperCase()}</div></div>
           <div style={{ width: 30, height: 30, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", background: on ? ACC : C.card, border: `1.5px solid ${on ? ACC : C.line}`, flexShrink: 0 }}>{on ? <Check size={16} color="#fff" strokeWidth={3} /> : <Plus size={16} color={C.faint} />}</div>
         </button>
@@ -1166,15 +1221,15 @@ export default function App() {
 
   const tabs = [{ id: "home", icon: Home, label: "Dashboard" }, { id: "train", icon: Dumbbell, label: "Train" }, { id: "programs", icon: Layers, label: "Programs" }, { id: "profile", icon: User, label: "Profile" }];
   return (
-    <div style={{ minHeight: "100vh", background: C.page, display: "flex", justifyContent: "center", fontFamily: SANS }}>
-      <div style={{ width: "100%", maxWidth: 430, background: C.page, position: "relative", paddingBottom: 96, minHeight: "100vh" }}>
-        <div style={{ paddingTop: 14 }}>
+    <div className="app-shell" style={{ background: C.page, display: "flex", justifyContent: "center", fontFamily: SANS }}>
+      <div style={{ width: "100%", maxWidth: 430, background: C.page, display: "flex", flexDirection: "column", height: "100%" }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
           {tab === "home" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} go={setTab} />}
           {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} go={setTab} />}
           {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} />}
           {tab === "profile" && <Profile profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} />}
         </div>
-        <div style={{ position: "fixed", bottom: 0, width: "100%", maxWidth: 430, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "8px 8px 22px" }}>
+        <div style={{ flexShrink: 0, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "8px 8px max(22px, env(safe-area-inset-bottom))" }}>
           {tabs.map((t) => { const on = tab === t.id, Icon = t.icon; return (<button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "8px 0", WebkitTapHighlightColor: "transparent" }}><Icon size={23} color={on ? ACC : C.faint} strokeWidth={on ? 2.4 : 2} /><span style={{ fontFamily: SANS, fontSize: 11, fontWeight: on ? 650 : 500, color: on ? C.ink : C.faint }}>{t.label}</span></button>); })}
         </div>
       </div>
