@@ -6,6 +6,7 @@ import {
   Play, Pause, Square, Trash2, RotateCcw, BarChart3, Clock, Pencil, Target, Calendar,
   Info, ChevronUp, ChevronDown,
 } from "lucide-react";
+import EXERCISES_DATA from "./data/exercises.json";
 
 /* ===== TOKENS ===== */
 const C = {
@@ -90,47 +91,38 @@ function recommend(last, lastReadiness, todayReadiness) {
 }
 
 /* ===== exercises + default programs (no seeded history) ===== */
-const EXERCISE_DB = [
-  { id: "bb_bench", name: "Barbell Bench Press", muscle: "Chest", equip: "Barbell" },
-  { id: "db_incline", name: "Incline Dumbbell Press", muscle: "Chest", equip: "Dumbbell" },
-  { id: "pushup", name: "Push-Up", muscle: "Chest", equip: "Bodyweight" },
-  { id: "bb_row", name: "Barbell Row", muscle: "Back", equip: "Barbell" },
-  { id: "pullup", name: "Pull-Up", muscle: "Back", equip: "Bodyweight" },
-  { id: "db_row", name: "One-Arm Dumbbell Row", muscle: "Back", equip: "Dumbbell" },
-  { id: "band_pull", name: "Band Pull-Apart", muscle: "Back", equip: "Bands" },
-  { id: "bb_squat", name: "Barbell Back Squat", muscle: "Legs", equip: "Barbell" },
-  { id: "rdl", name: "Romanian Deadlift", muscle: "Legs", equip: "Barbell" },
-  { id: "db_lunge", name: "Dumbbell Walking Lunge", muscle: "Legs", equip: "Dumbbell" },
-  { id: "kb_swing", name: "Kettlebell Swing", muscle: "Legs", equip: "Kettlebell" },
-  { id: "db_ohp", name: "Seated Dumbbell Press", muscle: "Shoulders", equip: "Dumbbell" },
-  { id: "lat_raise", name: "Dumbbell Lateral Raise", muscle: "Shoulders", equip: "Dumbbell" },
-  { id: "db_curl", name: "Dumbbell Bicep Curl", muscle: "Arms", equip: "Dumbbell" },
-  { id: "skull", name: "EZ-Bar Skullcrusher", muscle: "Arms", equip: "Barbell" },
-  { id: "plank", name: "Plank", muscle: "Core", equip: "Bodyweight" },
-];
-const exName = (id) => EXERCISE_DB.find((e) => e.id === id)?.name || id;
-const exMuscle = (id) => EXERCISE_DB.find((e) => e.id === id)?.muscle || "";
-const isBW = (id) => EXERCISE_DB.find((e) => e.id === id)?.equip === "Bodyweight";
+const EXERCISE_DB = EXERCISES_DATA;
+const EXERCISE_MAP = new Map(EXERCISE_DB.map((e) => [e.id, e]));
+const EQUIP_OPTIONS = ["All", ...Array.from(new Set(EXERCISE_DB.map((e) => e.equipment))).sort()];
+const cap = (s) => (s || "").replace(/\b\w/g, (c) => c.toUpperCase());
+const exName = (id) => EXERCISE_MAP.get(id)?.name || id;
+const exMuscle = (id) => EXERCISE_MAP.get(id)?.bodyPart || "";
+const isBW = (id) => EXERCISE_MAP.get(id)?.equipment === "body weight";
 const N = (sets) => ({ id: null, sets, last: { w: 0, reps: 10, rir: "amber", logged: false } });
 const ex = (id, sets) => ({ ...N(sets), id });
 
+/* dataset exercise ids used by the default programs below:
+   0025 Barbell Bench Press · 0314 Dumbbell Incline Bench Press · 0662 Push-Up · 0027 Barbell Bent Over Row
+   0652 Pull-Up · 0292 Dumbbell One Arm Bent-Over Row · band_pull Band Pull-Apart (custom) · 1436 Barbell High Bar Squat
+   0085 Barbell Romanian Deadlift · 0336 Dumbbell Lunge · 0549 Kettlebell Swing · 0405 Dumbbell Seated Shoulder Press
+   0334 Dumbbell Lateral Raise · 0294 Dumbbell Biceps Curl · 0060 Barbell Lying Triceps Extension Skull Crusher · plank Plank (custom) */
 const DEFAULT_PROGRAMS = [
   { id: "p1", name: "Strength", style: "strength", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
-    { name: "Push", ex: [ex("bb_bench", 4), ex("db_ohp", 3), ex("db_incline", 3), ex("skull", 3)] },
-    { name: "Pull", ex: [ex("bb_row", 4), ex("pullup", 3), ex("db_curl", 3)] },
-    { name: "Legs", ex: [ex("bb_squat", 4), ex("rdl", 3), ex("db_lunge", 3)] },
-    { name: "Full Body", ex: [ex("kb_swing", 3), ex("lat_raise", 3), ex("plank", 3)] },
+    { name: "Push", ex: [ex("0025", 4), ex("0405", 3), ex("0314", 3), ex("0060", 3)] },
+    { name: "Pull", ex: [ex("0027", 4), ex("0652", 3), ex("0294", 3)] },
+    { name: "Legs", ex: [ex("1436", 4), ex("0085", 3), ex("0336", 3)] },
+    { name: "Full Body", ex: [ex("0549", 3), ex("0334", 3), ex("plank", 3)] },
   ] },
   { id: "p2", name: "Hypertrophy", style: "hypertrophy", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
-    { name: "Chest & Triceps", ex: [ex("db_incline", 4), ex("bb_bench", 3), ex("skull", 3), ex("pushup", 2)] },
-    { name: "Back & Biceps", ex: [ex("db_row", 4), ex("pullup", 3), ex("band_pull", 3), ex("db_curl", 3)] },
-    { name: "Legs", ex: [ex("bb_squat", 4), ex("rdl", 4), ex("db_lunge", 3)] },
-    { name: "Shoulders & Arms", ex: [ex("db_ohp", 4), ex("lat_raise", 4), ex("db_curl", 3), ex("skull", 3)] },
+    { name: "Chest & Triceps", ex: [ex("0314", 4), ex("0025", 3), ex("0060", 3), ex("0662", 2)] },
+    { name: "Back & Biceps", ex: [ex("0292", 4), ex("0652", 3), ex("band_pull", 3), ex("0294", 3)] },
+    { name: "Legs", ex: [ex("1436", 4), ex("0085", 4), ex("0336", 3)] },
+    { name: "Shoulders & Arms", ex: [ex("0405", 4), ex("0334", 4), ex("0294", 3), ex("0060", 3)] },
   ] },
   { id: "p3", name: "Conditioning", style: "conditioning", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
-    { name: "Circuit A", ex: [ex("kb_swing", 4), ex("db_lunge", 3), ex("pushup", 3), ex("plank", 3)] },
-    { name: "Circuit B", ex: [ex("bb_squat", 3), ex("db_row", 3), ex("db_ohp", 3), ex("kb_swing", 3)] },
-    { name: "Circuit C", ex: [ex("pullup", 3), ex("pushup", 3), ex("db_lunge", 3), ex("plank", 3)] },
+    { name: "Circuit A", ex: [ex("0549", 4), ex("0336", 3), ex("0662", 3), ex("plank", 3)] },
+    { name: "Circuit B", ex: [ex("1436", 3), ex("0292", 3), ex("0405", 3), ex("0549", 3)] },
+    { name: "Circuit C", ex: [ex("0652", 3), ex("0662", 3), ex("0336", 3), ex("plank", 3)] },
   ] },
 ];
 
@@ -1016,19 +1008,26 @@ function ProgramDetail({ program, onBack, onChange, onDelete, onStart, onPause, 
   );
 }
 
+const PICKER_LIMIT = 60;
 function Picker({ inDay, onToggle, onBack, dayName }) {
   const [q, setQ] = useState(""); const [equip, setEquip] = useState("All");
-  const equips = ["All", "Barbell", "Dumbbell", "Bodyweight", "Kettlebell", "Bands"];
-  const filtered = EXERCISE_DB.filter((e) => (equip === "All" || e.equip === equip) && e.name.toLowerCase().includes(q.toLowerCase()));
+  const matched = EXERCISE_DB.filter((e) => (equip === "All" || e.equipment === equip) && e.name.toLowerCase().includes(q.toLowerCase()));
+  const filtered = matched.slice(0, PICKER_LIMIT);
   return (
     <div style={{ padding: "6px 18px 24px" }}>
       <button onClick={onBack} style={backBtn}><ChevronLeft size={20} /> {dayName}</button>
-      <PageTitle sub="Home gym library">Add exercise</PageTitle>
+      <PageTitle sub={`Exercise library · ${EXERCISE_DB.length} exercises`}>Add exercise</PageTitle>
       <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, border: `1.5px solid ${C.line}`, borderRadius: 13, padding: "0 14px", height: 54, marginBottom: 12 }}><Search size={18} color={C.faint} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search exercises" style={{ border: "none", outline: "none", fontFamily: SANS, fontSize: 16, flex: 1, color: C.ink, background: "transparent" }} />{q && <X size={18} color={C.faint} onClick={() => setQ("")} style={{ cursor: "pointer" }} />}</div>
-      <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 16, paddingBottom: 2 }}>{equips.map((eq) => (<button key={eq} onClick={() => setEquip(eq)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${equip === eq ? C.ink : C.line}`, background: equip === eq ? C.ink : C.card, color: equip === eq ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{eq}</button>))}</div>
+      <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 16, paddingBottom: 2 }}>{EQUIP_OPTIONS.map((eq) => (<button key={eq} onClick={() => setEquip(eq)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${equip === eq ? C.ink : C.line}`, background: equip === eq ? C.ink : C.card, color: equip === eq ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{eq === "All" ? eq : cap(eq)}</button>))}</div>
       {filtered.map((e) => { const on = inDay.includes(e.id); return (
-        <button key={e.id} onClick={() => onToggle(e.id)} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${on ? ACC : C.line}`, borderRadius: 13, padding: "14px 16px", marginBottom: 8, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}><div style={{ flex: 1 }}><div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 600, color: C.ink }}>{e.name}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 3 }}>{e.muscle.toUpperCase()} · {e.equip.toUpperCase()}</div></div><div style={{ width: 30, height: 30, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", background: on ? ACC : C.card, border: `1.5px solid ${on ? ACC : C.line}` }}>{on ? <Check size={16} color="#fff" strokeWidth={3} /> : <Plus size={16} color={C.faint} />}</div></button>
+        <button key={e.id} onClick={() => onToggle(e.id)} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${on ? ACC : C.line}`, borderRadius: 13, padding: "10px 16px", marginBottom: 8, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+          {e.image ? <img src={e.image} alt="" loading="lazy" style={{ width: 44, height: 44, borderRadius: 9, objectFit: "cover", background: C.page, flexShrink: 0 }} /> : <div style={{ width: 44, height: 44, borderRadius: 9, background: C.page, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Dumbbell size={18} color={C.faint} /></div>}
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 600, color: C.ink }}>{e.name}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 3 }}>{e.bodyPart.toUpperCase()} · {e.equipment.toUpperCase()}</div></div>
+          <div style={{ width: 30, height: 30, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", background: on ? ACC : C.card, border: `1.5px solid ${on ? ACC : C.line}`, flexShrink: 0 }}>{on ? <Check size={16} color="#fff" strokeWidth={3} /> : <Plus size={16} color={C.faint} />}</div>
+        </button>
       ); })}
+      {matched.length > PICKER_LIMIT && <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.faint, textAlign: "center", padding: "8px 0 0" }}>Showing {PICKER_LIMIT} of {matched.length} matches — keep typing to narrow it down.</div>}
+      {matched.length === 0 && <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, textAlign: "center", padding: "20px 0" }}>No exercises match "{q}".</div>}
     </div>
   );
 }
