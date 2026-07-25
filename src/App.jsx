@@ -1008,9 +1008,44 @@ function ProgramDetail({ program, onBack, onChange, onDelete, onStart, onPause, 
   );
 }
 
+function ExerciseDetail({ exercise, inDay, onToggle, onClose }) {
+  const on = inDay.includes(exercise.id);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(10,12,16,0.55)", zIndex: 60, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "20px 20px 0 0", padding: "18px 20px 34px", maxHeight: "86vh", overflowY: "auto" }}>
+        <div style={{ width: 38, height: 4, borderRadius: 2, background: C.line, margin: "0 auto 16px" }} />
+        {exercise.gif ? <img src={exercise.gif} alt="" style={{ width: "100%", borderRadius: 12, display: "block", background: C.page }} /> : <div style={{ width: "100%", height: 160, borderRadius: 12, background: C.page, display: "flex", alignItems: "center", justifyContent: "center" }}><Dumbbell size={28} color={C.faint} /></div>}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14 }}>
+          <h2 style={{ fontFamily: SANS, fontSize: 20, fontWeight: 700, color: C.ink, margin: 0 }}>{exercise.name}</h2>
+          <button onClick={onClose} style={miniRound}><X size={18} /></button>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+          <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 0.6, color: ACC, background: ACC_BG, padding: "4px 9px", borderRadius: 6 }}>{exercise.bodyPart.toUpperCase()}</span>
+          <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 0.6, color: C.sub, background: C.page, padding: "4px 9px", borderRadius: 6 }}>{exercise.equipment.toUpperCase()}</span>
+        </div>
+        {exercise.steps?.length > 0 && (
+          <>
+            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.faint, marginTop: 16 }}>HOW TO</div>
+            <ol style={{ margin: "8px 0 0", paddingLeft: 18, fontFamily: SANS, fontSize: 13.5, color: C.ink, lineHeight: 1.6 }}>
+              {exercise.steps.map((s, i) => <li key={i} style={{ marginBottom: 4 }}>{s}</li>)}
+            </ol>
+          </>
+        )}
+        <div style={{ marginTop: 16 }}>
+          {on ? (
+            <BigButton tone="ghost" onClick={() => { onToggle(exercise.id); onClose(); }}>Remove from workout</BigButton>
+          ) : (
+            <BigButton tone="acc" onClick={() => { onToggle(exercise.id); onClose(); }}>Add to workout</BigButton>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 const PICKER_LIMIT = 60;
 function Picker({ inDay, onToggle, onBack, dayName }) {
   const [q, setQ] = useState(""); const [equip, setEquip] = useState("All");
+  const [detail, setDetail] = useState(null);
   const matched = EXERCISE_DB.filter((e) => (equip === "All" || e.equipment === equip) && e.name.toLowerCase().includes(q.toLowerCase()));
   const filtered = matched.slice(0, PICKER_LIMIT);
   return (
@@ -1021,13 +1056,17 @@ function Picker({ inDay, onToggle, onBack, dayName }) {
       <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 16, paddingBottom: 2 }}>{EQUIP_OPTIONS.map((eq) => (<button key={eq} onClick={() => setEquip(eq)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${equip === eq ? C.ink : C.line}`, background: equip === eq ? C.ink : C.card, color: equip === eq ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{eq === "All" ? eq : cap(eq)}</button>))}</div>
       {filtered.map((e) => { const on = inDay.includes(e.id); return (
         <button key={e.id} onClick={() => onToggle(e.id)} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${on ? ACC : C.line}`, borderRadius: 13, padding: "10px 16px", marginBottom: 8, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
-          {e.image ? <img src={e.image} alt="" loading="lazy" style={{ width: 44, height: 44, borderRadius: 9, objectFit: "cover", background: C.page, flexShrink: 0 }} /> : <div style={{ width: 44, height: 44, borderRadius: 9, background: C.page, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Dumbbell size={18} color={C.faint} /></div>}
+          <div onClick={(ev) => { ev.stopPropagation(); setDetail(e); }} style={{ position: "relative", width: 44, height: 44, flexShrink: 0, cursor: "pointer" }}>
+            {e.image ? <img src={e.image} alt="" loading="lazy" style={{ width: 44, height: 44, borderRadius: 9, objectFit: "cover", background: C.page, display: "block" }} /> : <div style={{ width: 44, height: 44, borderRadius: 9, background: C.page, display: "flex", alignItems: "center", justifyContent: "center" }}><Dumbbell size={18} color={C.faint} /></div>}
+            {e.gif && <div style={{ position: "absolute", inset: 0, background: "rgba(18,20,26,0.28)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ width: 16, height: 16, borderRadius: 8, background: "rgba(255,255,255,0.92)", display: "flex", alignItems: "center", justifyContent: "center" }}><Play size={8} color={C.ink} fill={C.ink} /></div></div>}
+          </div>
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 600, color: C.ink }}>{e.name}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 3 }}>{e.bodyPart.toUpperCase()} · {e.equipment.toUpperCase()}</div></div>
           <div style={{ width: 30, height: 30, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", background: on ? ACC : C.card, border: `1.5px solid ${on ? ACC : C.line}`, flexShrink: 0 }}>{on ? <Check size={16} color="#fff" strokeWidth={3} /> : <Plus size={16} color={C.faint} />}</div>
         </button>
       ); })}
       {matched.length > PICKER_LIMIT && <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.faint, textAlign: "center", padding: "8px 0 0" }}>Showing {PICKER_LIMIT} of {matched.length} matches — keep typing to narrow it down.</div>}
       {matched.length === 0 && <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, textAlign: "center", padding: "20px 0" }}>No exercises match "{q}".</div>}
+      {detail && <ExerciseDetail exercise={detail} inDay={inDay} onToggle={onToggle} onClose={() => setDetail(null)} />}
     </div>
   );
 }
