@@ -804,7 +804,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go, equi
         const dirColor = rec.dir === "up" ? C.green : rec.dir === "down" ? C.red : C.sub;
         const bw = isBW(exx.id);
         const prev = exx.last?.logged ? (exx.last.w > 0 ? `${wStr(exx.last.w, u)}×${exx.last.reps}` : `${exx.last.reps}`) : "—";
-        const th = { flex: 1, fontFamily: MONO, fontSize: 9, letterSpacing: .8, color: C.faint, textAlign: "center" };
+        const th = { flex: 1, fontFamily: MONO, fontSize: 10, letterSpacing: .8, color: C.faint, textAlign: "center" };
         return (
           <Card key={ei} style={{ padding: 16, marginBottom: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 12 }}>
@@ -818,7 +818,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go, equi
               {!rec.first && <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 600, color: C.ink, whiteSpace: "nowrap" }}>{rec.w === 0 ? "BW" : `${wStr(rec.w, u)} ${u}`}</span>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 7px" }}>
-              <div style={{ width: 26, fontFamily: MONO, fontSize: 9, letterSpacing: .8, color: C.faint, textAlign: "left" }}>SET</div>
+              <div style={{ width: 26, fontFamily: MONO, fontSize: 10, letterSpacing: .8, color: C.faint, textAlign: "left" }}>SET</div>
               <div style={th}>{specs ? "TARGET" : "PREV"}</div>
               <div style={th}>{bw ? "+" + u.toUpperCase() : u.toUpperCase()}</div>
               <div style={th}>REPS</div>
@@ -827,7 +827,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go, equi
             {rows.map((spec, si) => {
               const key = `${ei}-${si}`, rated = done[key]; const sd = setData[key] || { w: "", reps: "" };
               const cell = { flex: 1, height: 44, background: C.page, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center" };
-              const inp = { border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 16, fontWeight: 600, color: C.ink, textAlign: "center", width: "100%", minWidth: 0 };
+              const inp = { border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 16, fontWeight: 600, color: C.ink, textAlign: "center", width: "100%", height: "100%", minWidth: 0 };
               const target = spec ? (spec.kind === "amrap" ? <span style={{ color: ACC, fontWeight: 700 }}>AMRAP</span> : `${spec.reps} reps`) : prev;
               return (
                 <div key={si}>
@@ -862,7 +862,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go, equi
   );
 }
 
-const tagPill = (color, bg) => ({ fontFamily: MONO, fontSize: 9.5, color, background: bg, padding: "3px 8px", borderRadius: 6, letterSpacing: 0.3, whiteSpace: "nowrap" });
+const tagPill = (color, bg) => ({ fontFamily: MONO, fontSize: 10.5, color, background: bg, padding: "3px 8px", borderRadius: 6, letterSpacing: 0.3, whiteSpace: "nowrap" });
 function catalogIcon(tags) {
   if (tags.includes("push/pull/legs")) return Activity;
   if (tags.includes("upper/lower")) return Layers;
@@ -970,7 +970,7 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
 
   return (
     <div style={{ padding: "6px 18px 24px" }}>
-      <PageTitle sub="Workout styles · pick any">Programs</PageTitle>
+      <PageTitle sub="Real programs · browse or build your own">Programs</PageTitle>
 
       <SectionLabel>Your programs</SectionLabel>
       {!activeProg && draftPrograms.length === 0 && completedPrograms.length === 0 && (
@@ -990,7 +990,7 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
 
       <div style={{ height: 6 }} />
       <SectionLabel>Programs library</SectionLabel>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, border: `1.5px solid ${C.line}`, borderRadius: 13, padding: "0 14px", height: 54, marginBottom: 12 }}><Search size={18} color={C.faint} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search programs or exercises" style={{ border: "none", outline: "none", fontFamily: SANS, fontSize: 16, flex: 1, color: C.ink, background: "transparent" }} />{q && <X size={18} color={C.faint} onClick={() => setQ("")} style={{ cursor: "pointer" }} />}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, border: `1.5px solid ${C.line}`, borderRadius: 13, padding: "0 14px", height: 54, marginBottom: 12 }}><Search size={18} color={C.faint} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search programs or exercises" style={{ border: "none", outline: "none", fontFamily: SANS, fontSize: 16, flex: 1, height: "100%", color: C.ink, background: "transparent" }} />{q && <X size={18} color={C.faint} onClick={() => setQ("")} style={{ cursor: "pointer" }} />}</div>
       <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 8, paddingBottom: 2 }}>{tagOptions.map((t) => (<button key={t} onClick={() => setTagFilter(t)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${tagFilter === t ? C.ink : C.line}`, background: tagFilter === t ? C.ink : C.card, color: tagFilter === t ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{t === "All" ? t : cap(t)}</button>))}</div>
       <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 16, paddingBottom: 2 }}>{dayOptions.map((d) => (<button key={d} onClick={() => setDaysFilter(d)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${daysFilter === d ? C.ink : C.line}`, background: daysFilter === d ? C.ink : C.card, color: daysFilter === d ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{d === "All" ? "All" : `${d} Days`}</button>))}</div>
 
@@ -1105,7 +1105,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
       <button onClick={onBack} style={backBtn}><ChevronLeft size={20} /> Programs</button>
       <Eyebrow>{paused ? `Paused · week ${programWeek(program)}` : program.active ? `Active · ${strategy.weekLabel(program, { sessionCount: sessionsFor(history, program.id).length, program }) || `${durStr(program)} in`}` : program.completedAt ? `Completed ${fmtDate(program.completedAt)}` : program.startedAt ? "Stopped" : "Not started"}</Eyebrow>
       <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0 14px" }}>
-        <input value={program.name} onChange={(e) => rename(e.target.value)} style={{ flex: 1, fontFamily: SANS, fontSize: 28, fontWeight: 700, color: C.ink, letterSpacing: -0.6, border: "none", outline: "none", background: "transparent", borderBottom: `1.5px dashed ${C.line}`, paddingBottom: 4 }} />
+        <input value={program.name} onChange={(e) => rename(e.target.value)} style={{ flex: 1, minWidth: 0, fontFamily: SANS, fontSize: 28, fontWeight: 700, color: C.ink, letterSpacing: -0.6, border: "none", outline: "none", background: "transparent", borderBottom: `1.5px dashed ${C.line}`, paddingBottom: 4 }} />
         <button onClick={() => setInfo(true)} style={{ ...miniRound, border: "none", background: C.page }}><Info size={18} color={C.sub} /></button>
       </div>
 
@@ -1132,7 +1132,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: d.ex.length ? 12 : 8 }}>
                     <DragHandle attributes={attributes} listeners={listeners} />
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: 1.2, color: ACC, fontWeight: 600 }}>WORKOUT {WLETTER[di] || di + 1}</div>
+                      <div style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: 1.2, color: ACC, fontWeight: 600 }}>WORKOUT {WLETTER[di] || di + 1}</div>
                       <input value={d.name} onChange={(e) => renameDay(di, e.target.value)} style={{ width: "100%", fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink, border: "none", outline: "none", background: "transparent", marginTop: 2 }} />
                     </div>
                     <button onClick={() => removeDay(di)} style={{ ...miniRound, width: 30, height: 30 }}><Trash2 size={15} color={C.sub} /></button>
@@ -1278,7 +1278,7 @@ function EquipmentManager({ equipment, setEquipment, unit, onClose }) {
           {!plates.length && <div style={{ padding: "14px 0", fontFamily: SANS, fontSize: 13.5, color: C.sub, textAlign: "center" }}>No plates added yet.</div>}
         </Card>
         <div style={{ display: "flex", gap: 8 }}>
-          <input inputMode="decimal" value={addStr} onChange={(e) => setAddStr(e.target.value)} placeholder={`Add a plate size (${u})`} style={{ flex: 1, height: 48, borderRadius: 11, border: `1.5px solid ${C.line}`, background: C.card, padding: "0 14px", fontFamily: MONO, fontSize: 15, color: C.ink, outline: "none" }} />
+          <input inputMode="decimal" value={addStr} onChange={(e) => setAddStr(e.target.value)} placeholder={`Add a plate size (${u})`} style={{ flex: 1, minWidth: 0, height: 48, borderRadius: 11, border: `1.5px solid ${C.line}`, background: C.card, padding: "0 14px", fontFamily: MONO, fontSize: 15, color: C.ink, outline: "none" }} />
           <button onClick={addPlate} style={{ width: 48, height: 48, borderRadius: 11, border: "none", background: C.ink, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }}><Plus size={20} /></button>
         </div>
       </div>
@@ -1303,8 +1303,8 @@ function PlateCalculator({ targetKg: initialKg, equipment, setEquipment, unit, o
         </div>
         <div style={{ margin: "16px 0" }}>
           <label style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6, display: "block" }}>Target weight</label>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.page, borderRadius: 12, padding: "10px 16px" }}>
-            <input inputMode="decimal" autoFocus value={targetStr} onChange={(e) => setTargetStr(e.target.value)} placeholder="0" style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 28, fontWeight: 700, color: C.ink }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, height: 56, background: C.page, borderRadius: 12, padding: "0 16px" }}>
+            <input inputMode="decimal" autoFocus value={targetStr} onChange={(e) => setTargetStr(e.target.value)} placeholder="0" style={{ flex: 1, minWidth: 0, height: "100%", border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 28, fontWeight: 700, color: C.ink }} />
             <span style={{ fontFamily: MONO, fontSize: 14, color: C.sub }}>{u}</span>
           </div>
         </div>
@@ -1323,7 +1323,7 @@ function PlateCalculator({ targetKg: initialKg, equipment, setEquipment, unit, o
                     borderRadius: 4, flexShrink: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
                   }}>
-                    <span style={{ writingMode: "vertical-rl", fontFamily: MONO, fontSize: 9, color: "#fff", fontWeight: 700 }}>{p.kg}</span>
+                    <span style={{ writingMode: "vertical-rl", fontFamily: MONO, fontSize: 10, color: "#fff", fontWeight: 700 }}>{p.kg}</span>
                   </div>
                 )))}
                 {!result.plates.length && <div style={{ fontFamily: SANS, fontSize: 13, color: C.faint, padding: "0 8px" }}>Just the bar</div>}
@@ -1362,7 +1362,7 @@ function Picker({ inDay, onToggle, onBack, dayName }) {
     <div style={{ padding: "6px 18px 24px" }}>
       <button onClick={onBack} style={backBtn}><ChevronLeft size={20} /> {dayName}</button>
       <PageTitle sub={`Exercise library · ${EXERCISE_DB.length} exercises`}>Add exercise</PageTitle>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, border: `1.5px solid ${C.line}`, borderRadius: 13, padding: "0 14px", height: 54, marginBottom: 12 }}><Search size={18} color={C.faint} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search exercises" style={{ border: "none", outline: "none", fontFamily: SANS, fontSize: 16, flex: 1, color: C.ink, background: "transparent" }} />{q && <X size={18} color={C.faint} onClick={() => setQ("")} style={{ cursor: "pointer" }} />}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, border: `1.5px solid ${C.line}`, borderRadius: 13, padding: "0 14px", height: 54, marginBottom: 12 }}><Search size={18} color={C.faint} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search exercises" style={{ border: "none", outline: "none", fontFamily: SANS, fontSize: 16, flex: 1, height: "100%", color: C.ink, background: "transparent" }} />{q && <X size={18} color={C.faint} onClick={() => setQ("")} style={{ cursor: "pointer" }} />}</div>
       <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 16, paddingBottom: 2 }}>{EQUIP_OPTIONS.map((eq) => (<button key={eq} onClick={() => setEquip(eq)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${equip === eq ? C.ink : C.line}`, background: equip === eq ? C.ink : C.card, color: equip === eq ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{eq === "All" ? eq : cap(eq)}</button>))}</div>
       {filtered.map((e) => { const on = inDay.includes(e.id); return (
         <button key={e.id} onClick={() => onToggle(e.id)} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${on ? ACC : C.line}`, borderRadius: 13, padding: "10px 16px", marginBottom: 8, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
