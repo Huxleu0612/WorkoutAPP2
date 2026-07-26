@@ -81,7 +81,107 @@ const linear = {
   },
 };
 
-export const STRATEGIES = { rir, linear };
+/* ===== percent-of-training-max strategies: nSuns 5/3/1 LP and 5/3/1 Boring But Big =====
+   Shared machinery for both: a training max (90% of an estimated 1RM) drives every set's weight as
+   a percentage, looked up from a per-lift table. Nothing here mutates state session-to-session —
+   the "current" training max and (for 531bbb) which week of the 4-week wave you're on are both
+   derived from how many sessions of this program you've logged so far, via ctx.sessionCount. This
+   avoids a separate counter that could ever drift out of sync with your actual training history. */
+export const epley1RM = (w, reps) => w * (1 + reps / 30);
+
+const LIFT_INCREMENT_KG = { squat: 5, deadlift: 5, bench: 2.5, ohp: 2.5 };
+const REQUIRED_LIFT_KEYS = ["squat", "bench", "deadlift", "ohp"];
+
+// 5/3/1's 4-week wave: 5s week, 3s week, 1s week, deload week
+const WAVE_531 = [
+  [{ pct: 0.65, reps: 5, kind: "fixed" }, { pct: 0.75, reps: 5, kind: "fixed" }, { pct: 0.85, reps: 5, kind: "amrap" }],
+  [{ pct: 0.70, reps: 3, kind: "fixed" }, { pct: 0.80, reps: 3, kind: "fixed" }, { pct: 0.90, reps: 3, kind: "amrap" }],
+  [{ pct: 0.75, reps: 5, kind: "fixed" }, { pct: 0.85, reps: 3, kind: "fixed" }, { pct: 0.95, reps: 1, kind: "amrap" }],
+  [{ pct: 0.40, reps: 5, kind: "fixed" }, { pct: 0.50, reps: 5, kind: "fixed" }, { pct: 0.60, reps: 5, kind: "fixed" }],
+];
+const WAVE_LABEL = ["5s week", "3s week", "1s week", "deload week"];
+const BBB_VOLUME = Array.from({ length: 5 }, () => ({ pct: 0.5, reps: 10, kind: "volume" }));
+
+// nSuns' classic 4-day LP: T1 is the main lift (9 sets), T2 a related lift at lower %s (5 sets) —
+// both tables are fixed every week; only the training max (and so the resulting weight) changes.
+const NSUNS_T1 = [
+  { pct: 0.65, reps: 8, kind: "fixed" }, { pct: 0.75, reps: 6, kind: "fixed" }, { pct: 0.85, reps: 4, kind: "fixed" },
+  { pct: 0.85, reps: 4, kind: "fixed" }, { pct: 0.85, reps: 4, kind: "amrap" },
+  { pct: 0.80, reps: 5, kind: "volume" }, { pct: 0.75, reps: 6, kind: "volume" }, { pct: 0.70, reps: 7, kind: "volume" }, { pct: 0.65, reps: 8, kind: "volume" },
+];
+const NSUNS_T2 = [
+  { pct: 0.50, reps: 8, kind: "fixed" }, { pct: 0.60, reps: 8, kind: "fixed" }, { pct: 0.70, reps: 8, kind: "fixed" },
+  { pct: 0.70, reps: 8, kind: "fixed" }, { pct: 0.70, reps: 8, kind: "volume" },
+];
+
+const weekIndexFor = (ctx) => Math.floor((ctx.sessionCount || 0) / (ctx.program?.days?.length || 1));
+const seedTM = (exx, ctx) => ctx.program?.periodization?.[exx.liftKey]?.tm || 0;
+const increment = (exx) => LIFT_INCREMENT_KG[exx.liftKey] ?? 2.5;
+const weightForSpec = (tm, spec) => round5(tm * spec.pct);
+
+const nsuns = {
+  setRatingKind: "log",
+  editable: { sets: false, exercises: false },
+  needsMaxes: true,
+  requiredLiftKeys: REQUIRED_LIFT_KEYS,
+  getSetSpecs(exx) {
+    return exx.tier === "T2" ? NSUNS_T2 : NSUNS_T1;
+  },
+  effectiveTM(exx, ctx) {
+    return seedTM(exx, ctx) + weekIndexFor(ctx) * increment(exx);
+  },
+  weightForSpec,
+  recommend(exx, ctx) {
+    const tm = this.effectiveTM(exx, ctx);
+    if (!tm) return { first: true, w: null, dir: "hold", action: "Set your training max", note: "Enter a training max for this lift in Profile or when you start the program." };
+    return { first: false, w: tm, dir: "up", action: `Training max ${tm}kg`, note: `Week ${weekIndexFor(ctx) + 1} — increases ${increment(exx)}kg every week on this lift.` };
+  },
+  finishExercise(exx, loggedSets) {
+    if (!loggedSets.length) return null;
+    const last = loggedSets[loggedSets.length - 1];
+    return { last: { w: last.w, reps: last.reps, logged: true } };
+  },
+  weekLabel(program, ctx) {
+    return `Week ${weekIndexFor(ctx) + 1}`;
+  },
+};
+
+// shared by both "5/3/1 (Original)" and "5/3/1 Boring But Big" — the BBB volume block is added
+// only when program.bbbVolume is set, so the two catalog entries can reuse one strategy
+const wave531 = {
+  setRatingKind: "log",
+  editable: { sets: false, exercises: false },
+  needsMaxes: true,
+  requiredLiftKeys: REQUIRED_LIFT_KEYS,
+  getSetSpecs(exx, ctx) {
+    const waveWeek = weekIndexFor(ctx) % 4;
+    const main = WAVE_531[waveWeek];
+    return ctx.program?.bbbVolume && waveWeek !== 3 ? [...main, ...BBB_VOLUME] : main;
+  },
+  effectiveTM(exx, ctx) {
+    const cycle = Math.floor(weekIndexFor(ctx) / 4);
+    return seedTM(exx, ctx) + cycle * increment(exx);
+  },
+  weightForSpec,
+  recommend(exx, ctx) {
+    const tm = this.effectiveTM(exx, ctx);
+    const waveWeek = weekIndexFor(ctx) % 4;
+    if (!tm) return { first: true, w: null, dir: "hold", action: "Set your training max", note: "Enter a training max for this lift in Profile or when you start the program." };
+    return { first: false, w: tm, dir: "up", action: `Training max ${tm}kg`, note: `${WAVE_LABEL[waveWeek]} — the max goes up ${increment(exx)}kg at the start of every new 4-week wave.` };
+  },
+  finishExercise(exx, loggedSets) {
+    if (!loggedSets.length) return null;
+    const last = loggedSets[loggedSets.length - 1];
+    return { last: { w: last.w, reps: last.reps, logged: true } };
+  },
+  weekLabel(program, ctx) {
+    const weekIndex = weekIndexFor(ctx);
+    const waveWeek = weekIndex % 4;
+    return `Week ${weekIndex + 1} · Wave ${Math.floor(weekIndex / 4) + 1} (${WAVE_LABEL[waveWeek]})`;
+  },
+};
+
+export const STRATEGIES = { rir, linear, nsuns, "531": wave531 };
 
 export function progressionOf(program, exx) {
   const type = exx?.progressionType || program?.progressionType;

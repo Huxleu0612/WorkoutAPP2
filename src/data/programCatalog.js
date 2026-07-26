@@ -49,7 +49,6 @@ const SKULLCRUSHER = "0060"; // Barbell Lying Triceps Extension Skull Crusher
 const PLANK = "plank"; // custom, no dataset match (see App.jsx)
 
 const LINEAR_5 = { targetReps: 5, incrementKg: 2.5, failsToDeload: 3, deloadPct: 0.9 };
-const LINEAR_531 = { targetReps: 5, incrementKg: 2.5, failsToDeload: 4, deloadPct: 0.9 };
 
 export const PROGRAM_CATALOG = [
   {
@@ -165,36 +164,34 @@ export const PROGRAM_CATALOG = [
     ],
   },
   {
-    templateId: "cat_531", name: "5/3/1 (Original)", style: "strength", progressionType: "linear",
+    templateId: "cat_531", name: "5/3/1 (Original)", style: "strength", progressionType: "531",
     tags: ["531", "powerlifting", "training max"], difficulty: "intermediate", daysPerWeek: 4, weeks: 16,
-    linearConfig: LINEAR_531,
     days: [
-      { name: "Squat Day", ex: [ex(SQUAT, 5, { incrementKg: 5 }), ex(HANGING_LEG_RAISE, 3, { progressionType: "rir" })] },
-      { name: "Bench Day", ex: [ex(BENCH, 5), ex(TRICEPS_PUSHDOWN, 3, { progressionType: "rir" })] },
-      { name: "Deadlift Day", ex: [ex(DEADLIFT, 5, { incrementKg: 5 }), ex(BARBELL_SHRUG, 3, { progressionType: "rir" })] },
-      { name: "OHP Day", ex: [ex(OHP, 5), ex(CHINUP, 3, { progressionType: "rir" })] },
+      { name: "Squat Day", ex: [ex(SQUAT, 3, { liftKey: "squat" }), ex(HANGING_LEG_RAISE, 3, { progressionType: "rir" })] },
+      { name: "Bench Day", ex: [ex(BENCH, 3, { liftKey: "bench" }), ex(TRICEPS_PUSHDOWN, 3, { progressionType: "rir" })] },
+      { name: "Deadlift Day", ex: [ex(DEADLIFT, 3, { liftKey: "deadlift" }), ex(BARBELL_SHRUG, 3, { progressionType: "rir" })] },
+      { name: "OHP Day", ex: [ex(OHP, 3, { liftKey: "ohp" }), ex(CHINUP, 3, { progressionType: "rir" })] },
     ],
   },
   {
-    templateId: "cat_531bbb", name: "5/3/1 Boring But Big", style: "hypertrophy", progressionType: "linear",
+    templateId: "cat_531bbb", name: "5/3/1 Boring But Big", style: "hypertrophy", progressionType: "531",
     tags: ["531", "high volume", "training max"], difficulty: "intermediate", daysPerWeek: 4, weeks: 16,
-    linearConfig: LINEAR_531,
+    bbbVolume: true,
     days: [
-      { name: "Squat Day", ex: [ex(SQUAT, 5, { incrementKg: 5 }), ex(FRONT_SQUAT, 5, { progressionType: "rir" }), ex(HANGING_LEG_RAISE, 3, { progressionType: "rir" })] },
-      { name: "Bench Day", ex: [ex(BENCH, 5), ex(DB_INCLINE_PRESS, 5, { progressionType: "rir" }), ex(TRICEPS_PUSHDOWN, 3, { progressionType: "rir" })] },
-      { name: "Deadlift Day", ex: [ex(DEADLIFT, 5, { incrementKg: 5 }), ex(RDL, 5, { progressionType: "rir" }), ex(BARBELL_SHRUG, 3, { progressionType: "rir" })] },
-      { name: "OHP Day", ex: [ex(OHP, 5), ex(DB_SHOULDER_PRESS, 5, { progressionType: "rir" }), ex(CHINUP, 3, { progressionType: "rir" })] },
+      { name: "Squat Day", ex: [ex(SQUAT, 8, { liftKey: "squat" }), ex(HANGING_LEG_RAISE, 3, { progressionType: "rir" })] },
+      { name: "Bench Day", ex: [ex(BENCH, 8, { liftKey: "bench" }), ex(TRICEPS_PUSHDOWN, 3, { progressionType: "rir" })] },
+      { name: "Deadlift Day", ex: [ex(DEADLIFT, 8, { liftKey: "deadlift" }), ex(BARBELL_SHRUG, 3, { progressionType: "rir" })] },
+      { name: "OHP Day", ex: [ex(OHP, 8, { liftKey: "ohp" }), ex(CHINUP, 3, { progressionType: "rir" })] },
     ],
   },
   {
-    templateId: "cat_nsuns", name: "nSuns 5/3/1 LP", style: "strength", progressionType: "linear",
+    templateId: "cat_nsuns", name: "nSuns 5/3/1 LP", style: "strength", progressionType: "nsuns",
     tags: ["531", "high frequency", "training max"], difficulty: "advanced", daysPerWeek: 4, weeks: 16,
-    linearConfig: { targetReps: 3, incrementKg: 2.5, failsToDeload: 4, deloadPct: 0.9 },
     days: [
-      { name: "Bench + OHP", ex: [ex(BENCH, 9), ex(OHP, 8, { progressionType: "rir" })] },
-      { name: "Squat + Sumo Deadlift", ex: [ex(SQUAT, 9, { incrementKg: 5 }), ex(SUMO_DEADLIFT, 6, { progressionType: "rir" })] },
-      { name: "OHP + Incline Bench", ex: [ex(OHP, 9), ex(INCLINE_BB_BENCH, 8, { progressionType: "rir" })] },
-      { name: "Deadlift + Front Squat", ex: [ex(DEADLIFT, 6, { incrementKg: 5 }), ex(FRONT_SQUAT, 8, { progressionType: "rir" })] },
+      { name: "Bench + OHP", ex: [ex(BENCH, 9, { liftKey: "bench", tier: "T1" }), ex(OHP, 5, { liftKey: "ohp", tier: "T2" })] },
+      { name: "Squat + Sumo Deadlift", ex: [ex(SQUAT, 9, { liftKey: "squat", tier: "T1" }), ex(SUMO_DEADLIFT, 5, { liftKey: "deadlift", tier: "T2" })] },
+      { name: "OHP + Incline Bench", ex: [ex(OHP, 9, { liftKey: "ohp", tier: "T1" }), ex(INCLINE_BB_BENCH, 5, { liftKey: "bench", tier: "T2" })] },
+      { name: "Deadlift + Front Squat", ex: [ex(DEADLIFT, 9, { liftKey: "deadlift", tier: "T1" }), ex(FRONT_SQUAT, 5, { liftKey: "squat", tier: "T2" })] },
     ],
   },
   {

@@ -599,7 +599,19 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
   const startWorkout = (idx) => {
     const d = active.days[idx];
     const init = {};
-    d.ex.forEach((exx, ei) => { const rec = progressionOf(active, exx).recommend(exx, { lastReadiness: active.lastReadiness, program: active }); Array.from({ length: setCount(exx) }).forEach((_, si) => { init[`${ei}-${si}`] = { w: exx.last?.logged && exx.last.w > 0 ? wStr(rec.w, u) : "", reps: exx.last?.logged ? String(exx.last.reps || 10) : "" }; }); });
+    const sessionCountAtStart = sessionsFor(history, active.id).length;
+    d.ex.forEach((exx, ei) => {
+      const strategy = progressionOf(active, exx);
+      const ctx = { lastReadiness: active.lastReadiness, program: active, sessionCount: sessionCountAtStart };
+      const specs = strategy.getSetSpecs ? strategy.getSetSpecs(exx, ctx) : null;
+      if (specs) {
+        const tm = strategy.effectiveTM(exx, ctx);
+        specs.forEach((spec, si) => { init[`${ei}-${si}`] = { w: tm ? wStr(strategy.weightForSpec(tm, spec), u) : "", reps: String(spec.reps) }; });
+      } else {
+        const rec = strategy.recommend(exx, ctx);
+        Array.from({ length: setCount(exx) }).forEach((_, si) => { init[`${ei}-${si}`] = { w: exx.last?.logged && exx.last.w > 0 ? wStr(rec.w, u) : "", reps: exx.last?.logged ? String(exx.last.reps || 10) : "" }; });
+      }
+    });
     setDraft({ programId: active.id, dayIdx: idx, dateKey: ymd(new Date()), setData: init, done: {}, startedAt: new Date().toISOString() });
     setOpenRating(null); setConfirmDiscard(false); setPhase("active");
   };
@@ -739,7 +751,9 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
   if (!live) return null;
   const day = active.days[live.dayIdx];
   const setData = live.setData || {}, done = live.done || {};
-  const subLine = `${active.name} · Week ${programWeek(active)} · ${wLabel(live.dayIdx)}`;
+  const sessionCount = sessionsFor(history, active.id).length;
+  const customWeekLabel = progressionOf(active).weekLabel(active, { sessionCount, program: active });
+  const subLine = `${active.name} · ${customWeekLabel || `Week ${programWeek(active)}`} · ${wLabel(live.dayIdx)}`;
   const totalSets = day.ex.reduce((n, e) => n + setCount(e), 0);
   const doneCount = Object.keys(done).length;
 
@@ -773,7 +787,11 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
       </div>
       {day.ex.map((exx, ei) => {
         const strategy = progressionOf(active, exx);
-        const rec = strategy.recommend(exx, { lastReadiness: active.lastReadiness, program: active });
+        const ctx = { lastReadiness: active.lastReadiness, program: active, sessionCount };
+        const rec = strategy.recommend(exx, ctx);
+        const specs = strategy.getSetSpecs ? strategy.getSetSpecs(exx, ctx) : null;
+        const tm = specs ? strategy.effectiveTM(exx, ctx) : null;
+        const rows = specs || Array.from({ length: setCount(exx) }).map(() => null);
         const ratings = ratingTable(strategy.setRatingKind);
         const ratingKeys = Object.keys(ratings);
         const Arrow = rec.dir === "up" ? ArrowUp : rec.dir === "down" ? ArrowDown : ArrowRight;
@@ -794,23 +812,24 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 7px" }}>
               <div style={{ width: 26, fontFamily: MONO, fontSize: 9, letterSpacing: .8, color: C.faint, textAlign: "left" }}>SET</div>
-              <div style={th}>PREV</div>
+              <div style={th}>{specs ? "TARGET" : "PREV"}</div>
               <div style={th}>{bw ? "+" + u.toUpperCase() : u.toUpperCase()}</div>
               <div style={th}>REPS</div>
               <div style={{ width: 48 }} />
             </div>
-            {Array.from({ length: setCount(exx) }).map((_, si) => {
+            {rows.map((spec, si) => {
               const key = `${ei}-${si}`, rated = done[key]; const sd = setData[key] || { w: "", reps: "" };
               const cell = { flex: 1, height: 44, background: C.page, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center" };
               const inp = { border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 16, fontWeight: 600, color: C.ink, textAlign: "center", width: "100%", minWidth: 0 };
+              const target = spec ? (spec.kind === "amrap" ? <span style={{ color: ACC, fontWeight: 700 }}>AMRAP</span> : `${spec.reps} reps`) : prev;
               return (
                 <div key={si}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0" }}>
                     <div style={{ width: 26, fontFamily: MONO, fontSize: 13, fontWeight: 600, color: C.faint, textAlign: "left" }}>{si + 1}</div>
-                    <div style={{ flex: 1, textAlign: "center", fontFamily: MONO, fontSize: 12, color: C.faint }}>{prev}</div>
+                    <div style={{ flex: 1, textAlign: "center", fontFamily: MONO, fontSize: 12, color: C.faint }}>{target}</div>
                     <div style={cell}><input inputMode="decimal" placeholder={bw ? "BW" : "—"} value={sd.w || ""} onChange={(e) => upd(key, "w", e.target.value)} style={inp} /></div>
-                    <div style={cell}><input inputMode="numeric" placeholder="—" value={sd.reps || ""} onChange={(e) => upd(key, "reps", e.target.value)} style={inp} /></div>
-                    <button onClick={() => setOpenRating(openRating === key ? null : key)} style={{ width: 48, height: 44, borderRadius: 10, cursor: "pointer", border: rated ? "none" : `1.5px solid ${C.line}`, background: rated ? ratings[rated].c : C.card, display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }}><Check size={18} color={rated ? "#fff" : C.faint} strokeWidth={rated ? 3 : 2.4} /></button>
+                    <div style={cell}><input inputMode="numeric" placeholder={spec ? String(spec.reps) : "—"} value={sd.reps || ""} onChange={(e) => upd(key, "reps", e.target.value)} style={inp} /></div>
+                    <button onClick={() => (strategy.setRatingKind === "log" ? rate(key, "logged") : setOpenRating(openRating === key ? null : key))} style={{ width: 48, height: 44, borderRadius: 10, cursor: "pointer", border: rated ? "none" : `1.5px solid ${C.line}`, background: rated ? (ratings[rated]?.c || ACC) : C.card, display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }}><Check size={18} color={rated ? "#fff" : C.faint} strokeWidth={rated ? 3 : 2.4} /></button>
                   </div>
                   {openRating === key && (
                     <div style={{ padding: "4px 0 10px" }}><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, letterSpacing: 1, marginBottom: 8 }}>{strategy.setRatingKind === "hitmiss" ? "DID YOU HIT THE TARGET REPS?" : "HOW HARD WAS THAT SET?"}</div>
@@ -865,14 +884,14 @@ function CatalogCard({ template, added, onOpen }) {
   );
 }
 const PROGRAM_LIBRARY_LIMIT = 20;
-function Programs({ programs, setPrograms, history, go }) {
+function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
   const [openId, setOpenId] = useState(null);
   const [info, setInfo] = useState(null);
   const [q, setQ] = useState("");
   const [tagFilter, setTagFilter] = useState("All");
   const [daysFilter, setDaysFilter] = useState("All");
-  const startProgram = (id, scheduleDays) => setPrograms(programs.map((p) => {
-    if (p.id === id) return { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0, completedAt: null, scheduleDays };
+  const startProgram = (id, scheduleDays, periodization) => setPrograms(programs.map((p) => {
+    if (p.id === id) return { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0, completedAt: null, scheduleDays, ...(periodization ? { periodization } : {}) };
     if (p.active) return { ...p, active: false, pausedAt: null, completedAt: new Date().toISOString() };
     return p;
   }));
@@ -888,7 +907,7 @@ function Programs({ programs, setPrograms, history, go }) {
     setPrograms([...programs, {
       id, name: template.name, style: template.style, progressionType: template.progressionType,
       tags: template.tags, difficulty: template.difficulty, daysPerWeek: template.daysPerWeek,
-      linearConfig: template.linearConfig, weeks: template.weeks, sourceTemplateId: template.templateId,
+      linearConfig: template.linearConfig, bbbVolume: template.bbbVolume, weeks: template.weeks, sourceTemplateId: template.templateId,
       active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal",
       days: template.days.map((d) => ({ name: d.name, ex: d.ex.map((e) => ({ ...e, last: { ...e.last } })) })),
     }]);
@@ -899,7 +918,7 @@ function Programs({ programs, setPrograms, history, go }) {
     const p = programs.find((x) => x.id === openId);
     if (!p) { setOpenId(null); return null; }
     const otherActive = programs.find((x) => x.active && x.id !== openId) || null;
-    return <ProgramDetail program={p} activeElsewhere={otherActive} onBack={() => setOpenId(null)} onChange={(np) => setPrograms(programs.map((x) => x.id === openId ? np : x))} onDelete={() => { setPrograms(programs.filter((x) => x.id !== openId)); setOpenId(null); }} onStart={(sd) => startProgram(openId, sd)} onPause={() => pauseProgram(openId)} onResume={() => resumeProgram(openId)} onComplete={() => completeProgram(openId)} onRestart={() => restartProgram(openId)} />;
+    return <ProgramDetail program={p} activeElsewhere={otherActive} maxes={maxes} setMaxes={setMaxes} history={history} onBack={() => setOpenId(null)} onChange={(np) => setPrograms(programs.map((x) => x.id === openId ? np : x))} onDelete={() => { setPrograms(programs.filter((x) => x.id !== openId)); setOpenId(null); }} onStart={(sd, per) => startProgram(openId, sd, per)} onPause={() => pauseProgram(openId)} onResume={() => resumeProgram(openId)} onComplete={() => completeProgram(openId)} onRestart={() => restartProgram(openId)} />;
   }
 
   const tagOptions = ["All", ...Array.from(new Set(PROGRAM_CATALOG.flatMap((p) => p.tags))).sort()];
@@ -977,9 +996,12 @@ function Programs({ programs, setPrograms, history, go }) {
   );
 }
 
-function ProgramDetail({ program, activeElsewhere, onBack, onChange, onDelete, onStart, onPause, onResume, onComplete, onRestart }) {
+const LIFT_LABELS = { squat: "Squat", bench: "Bench Press", deadlift: "Deadlift", ohp: "Overhead Press" };
+function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onBack, onChange, onDelete, onStart, onPause, onResume, onComplete, onRestart }) {
   const [picker, setPicker] = useState(null);
   const [starting, setStarting] = useState(false);
+  const [settingMaxes, setSettingMaxes] = useState(false);
+  const [maxInputs, setMaxInputs] = useState({});
   const [pending, setPending] = useState(null); // 'pause'|'complete'|'restart'|'delete'|'switch'
   const [pendingScheduleDays, setPendingScheduleDays] = useState(null);
   const [info, setInfo] = useState(false);
@@ -989,6 +1011,8 @@ function ProgramDetail({ program, activeElsewhere, onBack, onChange, onDelete, o
   const days = program.days;
   const paused = isPaused(program);
   const weeks = program.weeks || 12;
+  const strategy = progressionOf(program);
+  const neededLiftKeys = [...new Set(days.flatMap((d) => d.ex).map((e) => e.liftKey).filter(Boolean))];
   const rename = (v) => onChange({ ...program, name: v });
   const setWeeks = (w) => onChange({ ...program, weeks: Math.max(1, Math.min(52, w)) });
   const addDay = () => onChange({ ...program, days: [...days, { name: `Day ${days.length + 1}`, ex: [] }] });
@@ -1020,23 +1044,48 @@ function ProgramDetail({ program, activeElsewhere, onBack, onChange, onDelete, o
     ? { c: C.amber, t: "Long block. Past ~12 weeks on one unchanging plan, progress tends to plateau and fatigue/boredom build — a deload or switching programs usually restarts gains." }
     : { c: C.green, t: "Ideal range. 8–12 weeks is a solid block to progress through before changing things up." };
 
-  const controls = starting ? (
+  const buildPeriodization = () => Object.fromEntries(neededLiftKeys.map((lk) => [lk, { tm: parseFloat(maxInputs[lk]) || 0 }]));
+  const confirmStart = (scheduleDays) => {
+    const periodization = strategy.needsMaxes ? buildPeriodization() : null;
+    if (strategy.needsMaxes) {
+      setMaxes((m) => ({ ...m, ...Object.fromEntries(neededLiftKeys.map((lk) => [lk, { tm: parseFloat(maxInputs[lk]) || 0, updatedAt: new Date().toISOString() }])) }));
+    }
+    if (activeElsewhere) { setPendingScheduleDays(scheduleDays); onChange({ ...program, periodization: periodization || program.periodization }); setPending("switch"); }
+    else onStart(scheduleDays, periodization);
+    setStarting(false);
+  };
+
+  const controls = settingMaxes ? (
+    <Card style={{ padding: 18, marginBottom: 14, borderColor: ACC }}>
+      <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: C.ink }}>Set your training maxes</div>
+      <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, margin: "6px 0 14px", lineHeight: 1.45 }}>Every set's weight is calculated from these. A training max is usually about 90% of your true 1-rep max — better to start conservative than to grind failed reps in week one.</div>
+      {neededLiftKeys.map((lk) => (
+        <div key={lk} style={{ marginBottom: 12 }}>
+          <label style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6, display: "block" }}>{LIFT_LABELS[lk] || lk} training max (kg)</label>
+          <input inputMode="decimal" value={maxInputs[lk] ?? ""} onChange={(e) => setMaxInputs((m) => ({ ...m, [lk]: e.target.value }))} placeholder="e.g. 100" style={{ width: "100%", height: 48, borderRadius: 11, border: `1.5px solid ${C.line}`, background: C.card, padding: "0 14px", fontFamily: MONO, fontSize: 16, color: C.ink, outline: "none" }} />
+        </div>
+      ))}
+      <BigButton tone="acc" disabled={neededLiftKeys.some((lk) => !(parseFloat(maxInputs[lk]) > 0))} onClick={() => { setSettingMaxes(false); setStarting(true); }}>Continue</BigButton>
+      <button onClick={() => setSettingMaxes(false)} style={{ width: "100%", height: 44, marginTop: 8, borderRadius: 11, border: "none", background: "transparent", color: C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+    </Card>
+  ) : starting ? (
     <Card style={{ padding: 18, marginBottom: 14, borderColor: ACC }}>
       <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: C.ink }}>Which days will you train?</div>
       <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, margin: "6px 0 14px", lineHeight: 1.45 }}>Pick the weekdays for this program. You'll train your days <b>in order</b> — Day 1 on your first chosen day, Day 2 on the next, and so on — cycling through the week. ({program.days.length} training days set up.)</div>
       <div style={{ display: "flex", gap: 6, justifyContent: "space-between", marginBottom: 16 }}>
         {[1, 2, 3, 4, 5, 6, 0].map((wd) => { const on = pickDays.includes(wd); return (<button key={wd} onClick={() => toggleDay(wd)} style={{ flex: 1, height: 46, borderRadius: 11, border: `1.5px solid ${on ? ACC : C.line}`, background: on ? ACC : C.card, color: on ? "#fff" : C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 650, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{WD_LETTER[wd]}</button>); })}
       </div>
-      <BigButton tone="acc" disabled={pickDays.length === 0} onClick={() => {
-        const sorted = [...pickDays].sort();
-        if (activeElsewhere) { setPendingScheduleDays(sorted); setPending("switch"); setStarting(false); }
-        else { onStart(sorted); setStarting(false); }
-      }}>Start on {pickDays.length} day{pickDays.length !== 1 ? "s" : ""}/week</BigButton>
+      <BigButton tone="acc" disabled={pickDays.length === 0} onClick={() => confirmStart([...pickDays].sort())}>Start on {pickDays.length} day{pickDays.length !== 1 ? "s" : ""}/week</BigButton>
       <button onClick={() => setStarting(false)} style={{ width: "100%", height: 44, marginTop: 8, borderRadius: 11, border: "none", background: "transparent", color: C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
     </Card>
   ) : (
     <div style={{ marginBottom: 14, display: "grid", gap: 10 }}>
-      {!program.active && <BigButton tone="acc" disabled={days.length === 0} onClick={() => setStarting(true)}><Play size={16} /> {program.startedAt ? "Start again" : "Start program"}</BigButton>}
+      {!program.active && <BigButton tone="acc" disabled={days.length === 0} onClick={() => {
+        if (strategy.needsMaxes) {
+          setMaxInputs(Object.fromEntries(neededLiftKeys.map((lk) => [lk, program.periodization?.[lk]?.tm || maxes?.[lk]?.tm || ""])));
+          setSettingMaxes(true);
+        } else setStarting(true);
+      }}><Play size={16} /> {program.startedAt ? "Start again" : "Start program"}</BigButton>}
       {program.active && !paused && <div style={{ display: "flex", gap: 10 }}><BigButton tone="ghost" onClick={() => setPending("pause")}><Pause size={16} /> Pause</BigButton><BigButton tone="dark" onClick={() => setPending("complete")}><Square size={16} /> Finish</BigButton></div>}
       {paused && <BigButton tone="acc" onClick={onResume}><Play size={16} /> Resume program</BigButton>}
       {program.active && <BigButton tone="ghost" onClick={() => setPending("restart")}><RotateCcw size={16} /> Start over</BigButton>}
@@ -1046,7 +1095,7 @@ function ProgramDetail({ program, activeElsewhere, onBack, onChange, onDelete, o
   return (
     <div style={{ padding: "6px 18px 24px" }}>
       <button onClick={onBack} style={backBtn}><ChevronLeft size={20} /> Programs</button>
-      <Eyebrow>{paused ? `Paused · week ${programWeek(program)}` : program.active ? `Active · ${durStr(program)} in` : program.completedAt ? `Completed ${fmtDate(program.completedAt)}` : program.startedAt ? "Stopped" : "Not started"}</Eyebrow>
+      <Eyebrow>{paused ? `Paused · week ${programWeek(program)}` : program.active ? `Active · ${strategy.weekLabel(program, { sessionCount: sessionsFor(history, program.id).length, program }) || `${durStr(program)} in`}` : program.completedAt ? `Completed ${fmtDate(program.completedAt)}` : program.startedAt ? "Stopped" : "Not started"}</Eyebrow>
       <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0 14px" }}>
         <input value={program.name} onChange={(e) => rename(e.target.value)} style={{ flex: 1, fontFamily: SANS, fontSize: 28, fontWeight: 700, color: C.ink, letterSpacing: -0.6, border: "none", outline: "none", background: "transparent", borderBottom: `1.5px dashed ${C.line}`, paddingBottom: 4 }} />
         <button onClick={() => setInfo(true)} style={{ ...miniRound, border: "none", background: C.page }}><Info size={18} color={C.sub} /></button>
@@ -1284,6 +1333,7 @@ export default function App() {
   const [programs, setPrograms] = usePersist("wa_programs", []);
   const [history, setHistory] = usePersist("wa_history", []);
   const [draft, setDraft] = usePersist("wa_draft", null);
+  const [maxes, setMaxes] = usePersist("wa_maxes", {});
   const [tab, setTab] = useState("home");
   // one-time cleanup: drop the old auto-seeded p1/p2/p3 defaults if they were never actually started
   useEffect(() => { setPrograms((ps) => ps.filter((p) => !(["p1", "p2", "p3"].includes(p.id) && !p.startedAt && !p.completedAt))); }, []);
@@ -1291,7 +1341,7 @@ export default function App() {
   if (!profile.onboarded) return <Onboarding onDone={(p) => setProfile(p)} />;
 
   const finishSession = (session, updatedDays, readiness) => { setPrograms((ps) => ps.map((p) => p.id === session.programId ? { ...p, days: updatedDays, lastReadiness: readiness } : p)); setHistory((h) => [...h, session]); };
-  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setProfile({ onboarded: false }); setTab("home"); };
+  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setProfile({ onboarded: false }); setTab("home"); };
 
   const tabs = [{ id: "home", icon: Home, label: "Dashboard" }, { id: "train", icon: Dumbbell, label: "Train" }, { id: "programs", icon: Layers, label: "Programs" }, { id: "profile", icon: User, label: "Profile" }];
   return (
@@ -1300,7 +1350,7 @@ export default function App() {
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
           {tab === "home" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} go={setTab} />}
           {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} go={setTab} />}
-          {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} go={setTab} />}
+          {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} go={setTab} />}
           {tab === "profile" && <Profile profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} />}
         </div>
         <div style={{ flexShrink: 0, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "8px 8px max(22px, env(safe-area-inset-bottom))" }}>
