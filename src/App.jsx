@@ -93,31 +93,6 @@ const dayKey = (d) => { if (!dayIdCache.has(d)) dayIdCache.set(d, `day-${dayIdSe
 const N = (sets) => ({ id: null, sets, last: { w: 0, reps: 10, rir: "amber", logged: false } });
 const ex = (id, sets, cfg) => ({ ...N(sets), id, ...cfg });
 
-/* dataset exercise ids used by the default programs below:
-   0025 Barbell Bench Press · 0314 Dumbbell Incline Bench Press · 0662 Push-Up · 0027 Barbell Bent Over Row
-   0652 Pull-Up · 0292 Dumbbell One Arm Bent-Over Row · band_pull Band Pull-Apart (custom) · 1436 Barbell High Bar Squat
-   0085 Barbell Romanian Deadlift · 0336 Dumbbell Lunge · 0549 Kettlebell Swing · 0405 Dumbbell Seated Shoulder Press
-   0334 Dumbbell Lateral Raise · 0294 Dumbbell Biceps Curl · 0060 Barbell Lying Triceps Extension Skull Crusher · plank Plank (custom) */
-const DEFAULT_PROGRAMS = [
-  { id: "p1", name: "Strength", style: "strength", progressionType: "rir", tags: ["full body"], difficulty: "beginner", daysPerWeek: 4, weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
-    { name: "Push", ex: [ex("0025", 4), ex("0405", 3), ex("0314", 3), ex("0060", 3)] },
-    { name: "Pull", ex: [ex("0027", 4), ex("0652", 3), ex("0294", 3)] },
-    { name: "Legs", ex: [ex("1436", 4), ex("0085", 3), ex("0336", 3)] },
-    { name: "Full Body", ex: [ex("0549", 3), ex("0334", 3), ex("plank", 3)] },
-  ] },
-  { id: "p2", name: "Hypertrophy", style: "hypertrophy", progressionType: "rir", tags: ["body part split"], difficulty: "intermediate", daysPerWeek: 4, weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
-    { name: "Chest & Triceps", ex: [ex("0314", 4), ex("0025", 3), ex("0060", 3), ex("0662", 2)] },
-    { name: "Back & Biceps", ex: [ex("0292", 4), ex("0652", 3), ex("band_pull", 3), ex("0294", 3)] },
-    { name: "Legs", ex: [ex("1436", 4), ex("0085", 4), ex("0336", 3)] },
-    { name: "Shoulders & Arms", ex: [ex("0405", 4), ex("0334", 4), ex("0294", 3), ex("0060", 3)] },
-  ] },
-  { id: "p3", name: "Conditioning", style: "conditioning", progressionType: "rir", tags: ["conditioning", "full body"], difficulty: "beginner", daysPerWeek: 3, weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
-    { name: "Circuit A", ex: [ex("0549", 4), ex("0336", 3), ex("0662", 3), ex("plank", 3)] },
-    { name: "Circuit B", ex: [ex("1436", 3), ex("0292", 3), ex("0405", 3), ex("0549", 3)] },
-    { name: "Circuit C", ex: [ex("0652", 3), ex("0662", 3), ex("0336", 3), ex("plank", 3)] },
-  ] },
-];
-
 const RIR = { green: { c: C.green, bg: C.greenBg, label: "Easy", note: "3+ reps left" }, amber: { c: C.amber, bg: C.amberBg, label: "Working", note: "1–2 reps left" }, red: { c: C.red, bg: C.redBg, label: "Max", note: "0 reps left" } };
 const HITMISS = { hit: { c: C.green, bg: C.greenBg, label: "Hit", note: "Made the target reps" }, miss: { c: C.red, bg: C.redBg, label: "Miss", note: "Under the target" } };
 const ratingTable = (kind) => (kind === "hitmiss" ? HITMISS : RIR);
@@ -896,11 +871,15 @@ function Programs({ programs, setPrograms, history, go }) {
   const [q, setQ] = useState("");
   const [tagFilter, setTagFilter] = useState("All");
   const [daysFilter, setDaysFilter] = useState("All");
-  const startProgram = (id, scheduleDays) => setPrograms(programs.map((p) => p.id === id ? { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0, scheduleDays } : { ...p, active: false }));
+  const startProgram = (id, scheduleDays) => setPrograms(programs.map((p) => {
+    if (p.id === id) return { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0, completedAt: null, scheduleDays };
+    if (p.active) return { ...p, active: false, pausedAt: null, completedAt: new Date().toISOString() };
+    return p;
+  }));
   const pauseProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, pausedAt: new Date().toISOString() } : p));
   const resumeProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, pausedMs: (p.pausedMs || 0) + (Date.now() - new Date(p.pausedAt).getTime()), pausedAt: null } : p));
-  const stopProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, active: false, pausedAt: null } : p));
-  const restartProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0 } : { ...p, active: false }));
+  const completeProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, active: false, pausedAt: null, completedAt: new Date().toISOString() } : p));
+  const restartProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0, completedAt: null } : p));
   const createProgram = () => { const id = "p" + Date.now(); setPrograms([...programs, { id, name: "New Program", style: "custom", progressionType: "rir", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [] }]); setOpenId(id); };
   const addFromTemplate = (template) => {
     const existing = programs.find((p) => p.sourceTemplateId === template.templateId);
@@ -919,7 +898,8 @@ function Programs({ programs, setPrograms, history, go }) {
   if (openId) {
     const p = programs.find((x) => x.id === openId);
     if (!p) { setOpenId(null); return null; }
-    return <ProgramDetail program={p} onBack={() => setOpenId(null)} onChange={(np) => setPrograms(programs.map((x) => x.id === openId ? np : x))} onDelete={() => { setPrograms(programs.filter((x) => x.id !== openId)); setOpenId(null); }} onStart={(sd) => startProgram(openId, sd)} onPause={() => pauseProgram(openId)} onResume={() => resumeProgram(openId)} onStop={() => stopProgram(openId)} onRestart={() => restartProgram(openId)} />;
+    const otherActive = programs.find((x) => x.active && x.id !== openId) || null;
+    return <ProgramDetail program={p} activeElsewhere={otherActive} onBack={() => setOpenId(null)} onChange={(np) => setPrograms(programs.map((x) => x.id === openId ? np : x))} onDelete={() => { setPrograms(programs.filter((x) => x.id !== openId)); setOpenId(null); }} onStart={(sd) => startProgram(openId, sd)} onPause={() => pauseProgram(openId)} onResume={() => resumeProgram(openId)} onComplete={() => completeProgram(openId)} onRestart={() => restartProgram(openId)} />;
   }
 
   const tagOptions = ["All", ...Array.from(new Set(PROGRAM_CATALOG.flatMap((p) => p.tags))).sort()];
@@ -934,27 +914,52 @@ function Programs({ programs, setPrograms, history, go }) {
   const filtered = PROGRAM_CATALOG.filter((t) => matchesQuery(t) && (tagFilter === "All" || t.tags.includes(tagFilter)) && (daysFilter === "All" || t.daysPerWeek === daysFilter));
   const shownCatalog = filtered.slice(0, PROGRAM_LIBRARY_LIMIT);
 
+  const activeProg = programs.find((p) => p.active) || null;
+  const completedPrograms = programs.filter((p) => p.completedAt).sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+  // programs added from the library but never started stay reachable via their "ADDED" badge below,
+  // instead of cluttering this list — only custom drafts and legacy stopped programs show here
+  const draftPrograms = programs.filter((p) => !p.active && !p.completedAt && !(p.sourceTemplateId && !p.startedAt));
+
+  const renderRow = (p, i) => {
+    const runs = sessionsFor(history, p.id).length;
+    const meta = isPaused(p) ? `Paused · week ${programWeek(p)}` : p.active ? `Active · week ${programWeek(p)}` : p.completedAt ? `Completed · ${runs} logged` : p.startedAt ? `Stopped · ${runs} logged` : "Not started";
+    return (
+      <div key={p.id} style={{ background: C.card, borderRadius: 14, border: `${p.active ? 1.5 : 1}px solid ${p.active ? (isPaused(p) ? C.amber : ACC) : C.line}`, padding: 16, marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ fontFamily: MONO, fontSize: 13, color: p.active ? (isPaused(p) ? C.amber : ACC) : C.faint, fontWeight: 700 }}>{String(i + 1).padStart(2, "0")}</div>
+          <div onClick={() => setOpenId(p.id)} style={{ flex: 1, cursor: "pointer" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontFamily: SANS, fontSize: 18, fontWeight: 650, color: C.ink }}>{p.name}</span>
+              {p.active && <span style={{ fontFamily: MONO, fontSize: 9, background: isPaused(p) ? C.amber : ACC, color: "#fff", padding: "2px 7px", borderRadius: 5, letterSpacing: .5 }}>{isPaused(p) ? "PAUSED" : "ACTIVE"}</span>}
+              {p.completedAt && <span style={{ fontFamily: MONO, fontSize: 9, background: C.page, color: C.faint, padding: "2px 7px", borderRadius: 5, letterSpacing: .5 }}>DONE</span>}
+            </div>
+            <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub, marginTop: 4 }}>{meta} · {p.days.length} day{p.days.length !== 1 ? "s" : ""}</div></div>
+          <button onClick={() => setInfo(p.style || "custom")} style={{ ...miniRound, border: "none", background: C.page }}><Info size={18} color={C.sub} /></button>
+          <button onClick={() => setOpenId(p.id)} style={{ ...miniRound, border: "none", background: "transparent" }}><ChevronRight size={20} color={C.faint} /></button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ padding: "6px 18px 24px" }}>
       <PageTitle sub="Workout styles · pick any">Programs</PageTitle>
 
       <SectionLabel>Your programs</SectionLabel>
-      {programs.map((p, i) => {
-        const runs = sessionsFor(history, p.id).length;
-        const meta = isPaused(p) ? `Paused · week ${programWeek(p)}` : p.active ? `Active · week ${programWeek(p)}` : p.startedAt ? `Stopped · ${runs} logged` : "Not started";
-        return (
-          <div key={p.id} style={{ background: C.card, borderRadius: 14, border: `${p.active ? 1.5 : 1}px solid ${p.active ? (isPaused(p) ? C.amber : ACC) : C.line}`, padding: 16, marginBottom: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ fontFamily: MONO, fontSize: 13, color: p.active ? (isPaused(p) ? C.amber : ACC) : C.faint, fontWeight: 700 }}>{String(i + 1).padStart(2, "0")}</div>
-              <div onClick={() => setOpenId(p.id)} style={{ flex: 1, cursor: "pointer" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontFamily: SANS, fontSize: 18, fontWeight: 650, color: C.ink }}>{p.name}</span>{p.active && <span style={{ fontFamily: MONO, fontSize: 9, background: isPaused(p) ? C.amber : ACC, color: "#fff", padding: "2px 7px", borderRadius: 5, letterSpacing: .5 }}>{isPaused(p) ? "PAUSED" : "ACTIVE"}</span>}</div>
-                <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub, marginTop: 4 }}>{meta} · {p.days.length} day{p.days.length !== 1 ? "s" : ""}</div></div>
-              <button onClick={() => setInfo(p.style || "custom")} style={{ ...miniRound, border: "none", background: C.page }}><Info size={18} color={C.sub} /></button>
-              <button onClick={() => setOpenId(p.id)} style={{ ...miniRound, border: "none", background: "transparent" }}><ChevronRight size={20} color={C.faint} /></button>
-            </div>
-          </div>
-        );
-      })}
+      {!activeProg && draftPrograms.length === 0 && completedPrograms.length === 0 && (
+        <Card style={{ padding: 20, textAlign: "center", marginBottom: 12 }}>
+          <div style={{ fontFamily: SANS, fontSize: 14.5, color: C.sub, lineHeight: 1.5 }}>Nothing yet — add a program from the library below, or create your own.</div>
+        </Card>
+      )}
+      {activeProg && renderRow(activeProg, 0)}
+      {draftPrograms.length > 0 && <>
+        {(activeProg || completedPrograms.length > 0) && <SectionLabel>Not started</SectionLabel>}
+        {draftPrograms.map((p, i) => renderRow(p, i))}
+      </>}
+      {completedPrograms.length > 0 && <>
+        <SectionLabel>Completed</SectionLabel>
+        {completedPrograms.map((p, i) => renderRow(p, i))}
+      </>}
 
       <div style={{ height: 6 }} />
       <SectionLabel>Programs library</SectionLabel>
@@ -972,10 +977,11 @@ function Programs({ programs, setPrograms, history, go }) {
   );
 }
 
-function ProgramDetail({ program, onBack, onChange, onDelete, onStart, onPause, onResume, onStop, onRestart }) {
+function ProgramDetail({ program, activeElsewhere, onBack, onChange, onDelete, onStart, onPause, onResume, onComplete, onRestart }) {
   const [picker, setPicker] = useState(null);
   const [starting, setStarting] = useState(false);
-  const [pending, setPending] = useState(null); // 'pause'|'stop'|'restart'|'delete'
+  const [pending, setPending] = useState(null); // 'pause'|'complete'|'restart'|'delete'|'switch'
+  const [pendingScheduleDays, setPendingScheduleDays] = useState(null);
   const [info, setInfo] = useState(false);
   const [pickDays, setPickDays] = useState(program.scheduleDays?.length ? program.scheduleDays : (DEFAULT_DAYS[Math.min(7, Math.max(1, program.days.length || 3))] || [1, 3, 5]));
   const [detail, setDetail] = useState(null);
@@ -1021,13 +1027,17 @@ function ProgramDetail({ program, onBack, onChange, onDelete, onStart, onPause, 
       <div style={{ display: "flex", gap: 6, justifyContent: "space-between", marginBottom: 16 }}>
         {[1, 2, 3, 4, 5, 6, 0].map((wd) => { const on = pickDays.includes(wd); return (<button key={wd} onClick={() => toggleDay(wd)} style={{ flex: 1, height: 46, borderRadius: 11, border: `1.5px solid ${on ? ACC : C.line}`, background: on ? ACC : C.card, color: on ? "#fff" : C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 650, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{WD_LETTER[wd]}</button>); })}
       </div>
-      <BigButton tone="acc" disabled={pickDays.length === 0} onClick={() => { onStart([...pickDays].sort()); setStarting(false); }}>Start on {pickDays.length} day{pickDays.length !== 1 ? "s" : ""}/week</BigButton>
+      <BigButton tone="acc" disabled={pickDays.length === 0} onClick={() => {
+        const sorted = [...pickDays].sort();
+        if (activeElsewhere) { setPendingScheduleDays(sorted); setPending("switch"); setStarting(false); }
+        else { onStart(sorted); setStarting(false); }
+      }}>Start on {pickDays.length} day{pickDays.length !== 1 ? "s" : ""}/week</BigButton>
       <button onClick={() => setStarting(false)} style={{ width: "100%", height: 44, marginTop: 8, borderRadius: 11, border: "none", background: "transparent", color: C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
     </Card>
   ) : (
     <div style={{ marginBottom: 14, display: "grid", gap: 10 }}>
       {!program.active && <BigButton tone="acc" disabled={days.length === 0} onClick={() => setStarting(true)}><Play size={16} /> {program.startedAt ? "Start again" : "Start program"}</BigButton>}
-      {program.active && !paused && <div style={{ display: "flex", gap: 10 }}><BigButton tone="ghost" onClick={() => setPending("pause")}><Pause size={16} /> Pause</BigButton><BigButton tone="dark" onClick={() => setPending("stop")}><Square size={16} /> Stop</BigButton></div>}
+      {program.active && !paused && <div style={{ display: "flex", gap: 10 }}><BigButton tone="ghost" onClick={() => setPending("pause")}><Pause size={16} /> Pause</BigButton><BigButton tone="dark" onClick={() => setPending("complete")}><Square size={16} /> Finish</BigButton></div>}
       {paused && <BigButton tone="acc" onClick={onResume}><Play size={16} /> Resume program</BigButton>}
       {program.active && <BigButton tone="ghost" onClick={() => setPending("restart")}><RotateCcw size={16} /> Start over</BigButton>}
     </div>
@@ -1036,7 +1046,7 @@ function ProgramDetail({ program, onBack, onChange, onDelete, onStart, onPause, 
   return (
     <div style={{ padding: "6px 18px 24px" }}>
       <button onClick={onBack} style={backBtn}><ChevronLeft size={20} /> Programs</button>
-      <Eyebrow>{paused ? `Paused · week ${programWeek(program)}` : program.active ? `Active · ${durStr(program)} in` : program.startedAt ? "Stopped" : "Not started"}</Eyebrow>
+      <Eyebrow>{paused ? `Paused · week ${programWeek(program)}` : program.active ? `Active · ${durStr(program)} in` : program.completedAt ? `Completed ${fmtDate(program.completedAt)}` : program.startedAt ? "Stopped" : "Not started"}</Eyebrow>
       <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0 14px" }}>
         <input value={program.name} onChange={(e) => rename(e.target.value)} style={{ flex: 1, fontFamily: SANS, fontSize: 28, fontWeight: 700, color: C.ink, letterSpacing: -0.6, border: "none", outline: "none", background: "transparent", borderBottom: `1.5px dashed ${C.line}`, paddingBottom: 4 }} />
         <button onClick={() => setInfo(true)} style={{ ...miniRound, border: "none", background: C.page }}><Info size={18} color={C.sub} /></button>
@@ -1101,8 +1111,9 @@ function ProgramDetail({ program, onBack, onChange, onDelete, onStart, onPause, 
       <button onClick={addDay} style={{ width: "100%", height: 54, borderRadius: 13, border: "none", background: C.ink, color: "#fff", fontFamily: SANS, fontSize: 15, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 4, marginBottom: 18, WebkitTapHighlightColor: "transparent" }}><Plus size={18} strokeWidth={2.5} /> Add training day</button>
 
       {pending === "pause" && <ConfirmPanel title="Pause this program?" body="Your progress and stats stay intact — the week counter and consistency freeze until you resume. Ideal for a holiday." slideLabel="Slide to pause" color={C.amber} onConfirm={() => { onPause(); setPending(null); }} onCancel={() => setPending(null)} />}
-      {pending === "stop" && <ConfirmPanel title="Stop this program?" body="This ends the current block and makes it inactive. Your logged sessions stay in your all-time report. You can start it again later." slideLabel="Slide to stop" onConfirm={() => { onStop(); setPending(null); }} onCancel={() => setPending(null)} />}
+      {pending === "complete" && <ConfirmPanel title="Finish this program?" body="This ends the current block and moves it to your completed programs. Your logged sessions stay in your all-time report, and you can add it again later." slideLabel="Slide to finish" onConfirm={() => { onComplete(); setPending(null); }} onCancel={() => setPending(null)} />}
       {pending === "restart" && <ConfirmPanel title="Start over from week 1?" body="Resets the week counter to week 1 from today (useful if you've changed the plan). Your past logged sessions remain in your all-time report." slideLabel="Slide to start over" color={ACC} onConfirm={() => { onRestart(); setPending(null); }} onCancel={() => setPending(null)} />}
+      {pending === "switch" && <ConfirmPanel title={`Switch to ${program.name}?`} body={`This finishes "${activeElsewhere?.name}" — it moves to your completed programs — and starts "${program.name}" instead.`} slideLabel="Slide to switch" color={ACC} onConfirm={() => { onStart(pendingScheduleDays); setPending(null); setPendingScheduleDays(null); }} onCancel={() => { setPending(null); setPendingScheduleDays(null); }} />}
 
       {!pending && controls}
 
@@ -1270,15 +1281,17 @@ export default function App() {
   useState(() => { const v = loadLS("wa_ver", null); if (v !== VER) { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history"].forEach((k) => localStorage.removeItem(k)); } catch {} saveLS("wa_ver", VER); } return null; });
   const [profile, setProfile] = usePersist("wa_profile", { onboarded: false });
   const [weightLog, setWeightLog] = usePersist("wa_weightlog", {});
-  const [programs, setPrograms] = usePersist("wa_programs", DEFAULT_PROGRAMS);
+  const [programs, setPrograms] = usePersist("wa_programs", []);
   const [history, setHistory] = usePersist("wa_history", []);
   const [draft, setDraft] = usePersist("wa_draft", null);
   const [tab, setTab] = useState("home");
+  // one-time cleanup: drop the old auto-seeded p1/p2/p3 defaults if they were never actually started
+  useEffect(() => { setPrograms((ps) => ps.filter((p) => !(["p1", "p2", "p3"].includes(p.id) && !p.startedAt && !p.completedAt))); }, []);
 
   if (!profile.onboarded) return <Onboarding onDone={(p) => setProfile(p)} />;
 
   const finishSession = (session, updatedDays, readiness) => { setPrograms((ps) => ps.map((p) => p.id === session.programId ? { ...p, days: updatedDays, lastReadiness: readiness } : p)); setHistory((h) => [...h, session]); };
-  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms(DEFAULT_PROGRAMS); setHistory([]); setDraft(null); setProfile({ onboarded: false }); setTab("home"); };
+  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setProfile({ onboarded: false }); setTab("home"); };
 
   const tabs = [{ id: "home", icon: Home, label: "Dashboard" }, { id: "train", icon: Dumbbell, label: "Train" }, { id: "programs", icon: Layers, label: "Programs" }, { id: "profile", icon: User, label: "Profile" }];
   return (
