@@ -4,7 +4,7 @@ import {
   Home, Dumbbell, Layers, User, Plus, Minus, Check, ChevronLeft, ChevronRight,
   Search, X, TrendingDown, ArrowUp, ArrowRight, ArrowDown, Zap, Activity, Moon,
   Play, Pause, Square, Trash2, RotateCcw, BarChart3, Clock, Pencil, Target, Calendar,
-  Info, GripVertical,
+  Info, GripVertical, Calculator, Settings2,
 } from "lucide-react";
 import EXERCISES_DATA from "./data/exercises.json";
 import { PROGRAM_CATALOG } from "./data/programCatalog";
@@ -12,6 +12,7 @@ import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from 
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import { progressionOf } from "./lib/progression";
+import { calcPlateLoad, DEFAULT_EQUIPMENT } from "./lib/plates";
 
 /* ===== TOKENS ===== */
 const C = {
@@ -581,7 +582,7 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
     </div>
   );
 }
-function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
+function Train({ profile, programs, history, draft, setDraft, onFinish, go, equipment, setEquipment }) {
   const active = activeProgram(programs);
   const u = profile.unit;
   const live = draft && active && draft.programId === active.id ? draft : null;
@@ -591,6 +592,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
   const [finishedIdx, setFinishedIdx] = useState(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [detail, setDetail] = useState(null);
+  const [calcOpen, setCalcOpen] = useState(null);
   useEffect(() => { if (!live && (phase === "active" || phase === "review")) setPhase("schedule"); }, [live, phase]);
 
   if (!active) return (<div style={{ padding: "6px 18px 24px" }}><PageTitle sub="Workout">This week</PageTitle><Card style={{ padding: 30, textAlign: "center" }}><div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink }}>No active program</div><div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, margin: "6px 0 18px", lineHeight: 1.5 }}>Start a program on the Programs tab, then your week appears here.</div><BigButton tone="acc" onClick={() => go("programs")}>Go to Programs</BigButton></Card></div>);
@@ -674,7 +676,10 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
           </div>
         )}
 
-        <SectionLabel>This week's schedule</SectionLabel>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <SectionLabel>This week's schedule</SectionLabel>
+          <button onClick={() => setCalcOpen({ initialKg: 0 })} style={{ ...miniRound, marginBottom: 8 }}><Calculator size={16} /></button>
+        </div>
         <div style={{ display: "grid", gap: 10 }}>
           {week.map((d, i) => {
             const isWorkout = d.aidx != null;
@@ -708,6 +713,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
             );
           })}
         </div>
+        {calcOpen && <PlateCalculator targetKg={calcOpen.initialKg} equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setCalcOpen(null)} />}
       </div>
     );
   }
@@ -804,6 +810,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
             <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 12 }}>
               <ExerciseThumb exercise={exFull(exx.id)} onOpen={setDetail} />
               <div onClick={() => setDetail(exFull(exx.id))} style={{ flex: 1, cursor: "pointer" }}><div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink }}>{exName(exx.id)}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 1 }}>{exMuscle(exx.id).toUpperCase()}</div></div>
+              {!bw && <button onClick={() => setCalcOpen({ initialKg: tm || rec.w || 0 })} style={{ ...miniRound, width: 34, height: 34 }}><Calculator size={15} /></button>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.page, borderRadius: 10, padding: "9px 12px", marginBottom: 12 }}>
               <Arrow size={15} color={dirColor} strokeWidth={2.6} />
@@ -850,6 +857,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
         <button onClick={() => setConfirmDiscard(true)} style={{ width: "100%", height: 48, borderRadius: 13, border: `1.5px solid ${C.line}`, background: C.card, color: C.red, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7, WebkitTapHighlightColor: "transparent" }}><Trash2 size={15} /> Discard workout</button>
       )}
       {detail && <ExerciseDetail exercise={detail} onClose={() => setDetail(null)} />}
+      {calcOpen && <PlateCalculator targetKg={calcOpen.initialKg} equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setCalcOpen(null)} />}
     </div>
   );
 }
@@ -1221,6 +1229,129 @@ function ExerciseDetail({ exercise, inDay, onToggle, onClose }) {
     </div>
   );
 }
+
+/* ================================================================
+   PLATE CALCULATOR
+================================================================ */
+const PLATE_SHADES = [C.graphite, C.ink, "#3A3F4B", "#565C68", C.sub, "#9096A0", C.faint];
+
+function EquipmentManager({ equipment, setEquipment, unit, onClose }) {
+  const u = unit;
+  const [addStr, setAddStr] = useState("");
+  const toKg = (n) => (u === "lb" ? n / KG_TO_LB : n);
+  const plates = [...equipment.plates].sort((a, b) => b.kg - a.kg);
+  const setBar = (s) => { const n = parseFloat(s); if (!isNaN(n) && n > 0) setEquipment((e) => ({ ...e, barKg: toKg(n) })); };
+  const bump = (kg, d) => setEquipment((e) => ({ ...e, plates: e.plates.map((p) => p.kg === kg ? { ...p, pairsOwned: Math.max(0, p.pairsOwned + d) } : p) }));
+  const removePlate = (kg) => setEquipment((e) => ({ ...e, plates: e.plates.filter((p) => p.kg !== kg) }));
+  const addPlate = () => {
+    const n = parseFloat(addStr);
+    if (!isNaN(n) && n > 0) {
+      const kg = Math.round(toKg(n) * 100) / 100;
+      setEquipment((e) => (e.plates.some((p) => p.kg === kg) ? e : { ...e, plates: [...e.plates, { kg, pairsOwned: 1 }] }));
+      setAddStr("");
+    }
+  };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(10,12,16,0.55)", zIndex: 62, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "20px 20px 0 0", padding: "18px 20px 34px", maxHeight: "86vh", overflowY: "auto" }}>
+        <div style={{ width: 38, height: 4, borderRadius: 2, background: C.line, margin: "0 auto 16px" }} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ fontFamily: SANS, fontSize: 20, fontWeight: 700, color: C.ink, margin: 0 }}>Your equipment</h2>
+          <button onClick={onClose} style={miniRound}><X size={18} /></button>
+        </div>
+        <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, margin: "6px 0 4px", lineHeight: 1.45 }}>What you actually own — the plate calculator only suggests plates you have.</div>
+        <Card style={{ padding: "4px 16px", margin: "12px 0" }}>
+          <Row label="Barbell weight" last><EditableNumber key={`bar${u}`} initial={wStr(equipment.barKg, u)} onCommit={setBar} suffix={u} /></Row>
+        </Card>
+        <SectionLabel>Plates you own <span style={{ textTransform: "none", letterSpacing: 0, color: C.faint }}>· per side</span></SectionLabel>
+        <Card style={{ padding: "4px 16px", marginBottom: 12 }}>
+          {plates.map((p, i) => (
+            <Row key={p.kg} label={`${wStr(p.kg, u)} ${u}`} last={i === plates.length - 1}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <MiniStep onClick={() => bump(p.kg, -1)}><Minus size={16} strokeWidth={2.5} /></MiniStep>
+                <span style={{ fontFamily: MONO, fontSize: 15, color: C.ink, minWidth: 22, textAlign: "center" }}>{p.pairsOwned}</span>
+                <MiniStep onClick={() => bump(p.kg, 1)}><Plus size={16} strokeWidth={2.5} /></MiniStep>
+                <button onClick={() => removePlate(p.kg)} style={{ ...miniRound, width: 30, height: 30, border: "none" }}><X size={15} color={C.faint} /></button>
+              </div>
+            </Row>
+          ))}
+          {!plates.length && <div style={{ padding: "14px 0", fontFamily: SANS, fontSize: 13.5, color: C.sub, textAlign: "center" }}>No plates added yet.</div>}
+        </Card>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input inputMode="decimal" value={addStr} onChange={(e) => setAddStr(e.target.value)} placeholder={`Add a plate size (${u})`} style={{ flex: 1, height: 48, borderRadius: 11, border: `1.5px solid ${C.line}`, background: C.card, padding: "0 14px", fontFamily: MONO, fontSize: 15, color: C.ink, outline: "none" }} />
+          <button onClick={addPlate} style={{ width: 48, height: 48, borderRadius: 11, border: "none", background: C.ink, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }}><Plus size={20} /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlateCalculator({ targetKg: initialKg, equipment, setEquipment, unit, onClose }) {
+  const u = unit;
+  const [targetStr, setTargetStr] = useState(initialKg > 0 ? wStr(initialKg, u) : "");
+  const [editingEquip, setEditingEquip] = useState(false);
+  const n = parseFloat(targetStr);
+  const targetKg = n > 0 ? (u === "lb" ? n / KG_TO_LB : n) : 0;
+  const result = calcPlateLoad(targetKg, equipment.barKg, equipment.plates);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(10,12,16,0.55)", zIndex: 61, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "20px 20px 0 0", padding: "18px 20px 34px", maxHeight: "86vh", overflowY: "auto" }}>
+        <div style={{ width: 38, height: 4, borderRadius: 2, background: C.line, margin: "0 auto 16px" }} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ fontFamily: SANS, fontSize: 20, fontWeight: 700, color: C.ink, margin: 0 }}>Plate calculator</h2>
+          <button onClick={onClose} style={miniRound}><X size={18} /></button>
+        </div>
+        <div style={{ margin: "16px 0" }}>
+          <label style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6, display: "block" }}>Target weight</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.page, borderRadius: 12, padding: "10px 16px" }}>
+            <input inputMode="decimal" autoFocus value={targetStr} onChange={(e) => setTargetStr(e.target.value)} placeholder="0" style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 28, fontWeight: 700, color: C.ink }} />
+            <span style={{ fontFamily: MONO, fontSize: 14, color: C.sub }}>{u}</span>
+          </div>
+        </div>
+        {targetKg > 0 && (
+          result.belowBar ? (
+            <div style={{ padding: "12px 14px", background: C.amberBg, borderRadius: 11, fontFamily: SANS, fontSize: 13, color: C.ink, marginBottom: 14 }}>Target is lighter than the bar itself ({wStr(equipment.barKg, u)}{u}) — no plates needed.</div>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 4, padding: "18px 4px", overflowX: "auto" }}>
+                <div style={{ width: 12, height: 64, background: C.ink, borderRadius: "3px 0 0 3px", flexShrink: 0 }} />
+                {result.plates.flatMap((p, gi) => Array.from({ length: p.count }, (_, i) => (
+                  <div key={`${gi}-${i}`} style={{
+                    width: Math.max(16, Math.min(28, 12 + p.kg * 0.5)),
+                    height: Math.max(44, Math.min(92, 40 + p.kg * 2)),
+                    background: PLATE_SHADES[gi % PLATE_SHADES.length],
+                    borderRadius: 4, flexShrink: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    <span style={{ writingMode: "vertical-rl", fontFamily: MONO, fontSize: 9, color: "#fff", fontWeight: 700 }}>{p.kg}</span>
+                  </div>
+                )))}
+                {!result.plates.length && <div style={{ fontFamily: SANS, fontSize: 13, color: C.faint, padding: "0 8px" }}>Just the bar</div>}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+                {result.plates.map((p) => (
+                  <span key={p.kg} style={{ fontFamily: MONO, fontSize: 12.5, background: C.page, borderRadius: 8, padding: "6px 11px", color: C.ink, fontWeight: 600 }}>{p.count}× {wStr(p.kg, u)}{u}</span>
+                ))}
+              </div>
+              <Card style={{ padding: 16, marginBottom: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub }}>Bar {wStr(equipment.barKg, u)}{u} + plates per side</div>
+                  <div style={{ fontFamily: MONO, fontSize: 20, fontWeight: 700, color: C.ink }}>{wStr(result.achievedTotal, u)} {u}</div>
+                </div>
+                {!result.exact && (
+                  <div style={{ marginTop: 10, padding: "10px 12px", background: C.amberBg, borderRadius: 10, fontFamily: SANS, fontSize: 12.5, color: C.ink, lineHeight: 1.4 }}>Closest with your plates — {wStr(result.shortBy, u)}{u} short of {targetStr}{u}.</div>
+                )}
+              </Card>
+            </>
+          )
+        )}
+        <button onClick={() => setEditingEquip(true)} style={{ width: "100%", height: 44, borderRadius: 11, border: `1.5px solid ${C.line}`, background: C.card, color: C.ink, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7, WebkitTapHighlightColor: "transparent" }}><Settings2 size={15} /> Edit my equipment</button>
+      </div>
+      {editingEquip && <EquipmentManager equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setEditingEquip(false)} />}
+    </div>
+  );
+}
+
 const PICKER_LIMIT = 60;
 function Picker({ inDay, onToggle, onBack, dayName }) {
   const [q, setQ] = useState(""); const [equip, setEquip] = useState("All");
@@ -1334,6 +1465,7 @@ export default function App() {
   const [history, setHistory] = usePersist("wa_history", []);
   const [draft, setDraft] = usePersist("wa_draft", null);
   const [maxes, setMaxes] = usePersist("wa_maxes", {});
+  const [equipment, setEquipment] = usePersist("wa_equipment", DEFAULT_EQUIPMENT);
   const [tab, setTab] = useState("home");
   // one-time cleanup: drop the old auto-seeded p1/p2/p3 defaults if they were never actually started
   useEffect(() => { setPrograms((ps) => ps.filter((p) => !(["p1", "p2", "p3"].includes(p.id) && !p.startedAt && !p.completedAt))); }, []);
@@ -1341,7 +1473,7 @@ export default function App() {
   if (!profile.onboarded) return <Onboarding onDone={(p) => setProfile(p)} />;
 
   const finishSession = (session, updatedDays, readiness) => { setPrograms((ps) => ps.map((p) => p.id === session.programId ? { ...p, days: updatedDays, lastReadiness: readiness } : p)); setHistory((h) => [...h, session]); };
-  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setProfile({ onboarded: false }); setTab("home"); };
+  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setProfile({ onboarded: false }); setTab("home"); };
 
   const tabs = [{ id: "home", icon: Home, label: "Dashboard" }, { id: "train", icon: Dumbbell, label: "Train" }, { id: "programs", icon: Layers, label: "Programs" }, { id: "profile", icon: User, label: "Profile" }];
   return (
@@ -1349,7 +1481,7 @@ export default function App() {
       <div style={{ width: "100%", maxWidth: 430, background: C.page, display: "flex", flexDirection: "column", height: "100%" }}>
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
           {tab === "home" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} go={setTab} />}
-          {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} go={setTab} />}
+          {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
           {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} go={setTab} />}
           {tab === "profile" && <Profile profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} />}
         </div>
