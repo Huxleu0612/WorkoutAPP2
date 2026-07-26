@@ -519,7 +519,7 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
             <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.2, color: C.faint, fontWeight: 600 }}>REST DAY</div>
             <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 700, color: C.ink, margin: "6px 0 4px" }}>{selDay.isToday ? "Rest up" : `${WD_LONG[selDay.dow]} ${selDay.dt.getDate()} ${MON[selDay.dt.getMonth()]}`}</div>
             <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, lineHeight: 1.5 }}>Nothing planned — recovery is where the gains happen.</div>
-            <button onClick={() => go("train")} style={{ marginTop: 12, background: "none", border: "none", cursor: "pointer", fontFamily: SANS, fontSize: 13, fontWeight: 600, color: ACC }}>Start a workout anyway →</button>
+            <button onClick={() => go("train")} style={{ marginTop: 12, height: 44, padding: "0 8px", background: "none", border: "none", cursor: "pointer", fontFamily: SANS, fontSize: 13, fontWeight: 600, color: ACC }}>Start a workout anyway →</button>
           </Card>
         );
       })()}
@@ -576,7 +576,7 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
               <Line type="monotone" dataKey="w" stroke={ACC} strokeWidth={2.5} dot={{ r: 3, fill: ACC }} activeDot={{ r: 5 }} connectNulls name="Weight" />
             </LineChart>
           </ResponsiveContainer>
-          <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 14px" }}><span style={{ fontFamily: MONO, fontSize: 9.5, color: C.faint }}><span style={{ color: ACC }}>—</span> WEIGHT　┄ GOAL</span><span style={{ fontFamily: MONO, fontSize: 9.5, color: C.faint }}>GRID · 5 {u.toUpperCase()}</span></div>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 14px" }}><span style={{ fontFamily: MONO, fontSize: 10.5, color: C.faint }}><span style={{ color: ACC }}>—</span> WEIGHT　┄ GOAL</span><span style={{ fontFamily: MONO, fontSize: 10.5, color: C.faint }}>GRID · 5 {u.toUpperCase()}</span></div>
         </>)}
       </Card>
     </div>
