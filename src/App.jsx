@@ -910,9 +910,13 @@ function ProgressionInfoModal({ template, onClose }) {
           <L>HOW THE PROGRAM IS STRUCTURED</L>
           <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>{info.what}</div>
         </div>
-        <div>
+        <div style={{ marginBottom: 14 }}>
           <L>HOW THE PROGRESSION WORKS</L>
           <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>{info.how}{template.bbbVolume ? " Boring But Big also tacks on 5 extra sets of 10 reps at 50% of your training max after the main work, for added size." : ""}</div>
+        </div>
+        <div>
+          <L>RECOMMENDED TRAINING DAYS</L>
+          <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>{template.daysPerWeek} days a week is the sweet spot — this program is built around a {template.daysPerWeek}-day rotation, so that's the pace its progression is tuned for. Fewer days stretches the wave/stage timing out longer than intended; more doubles a lift up before it's meant to come back around.</div>
         </div>
       </div>
     </div>
@@ -1138,6 +1142,12 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
     <Card style={{ padding: 18, marginBottom: 14, borderColor: ACC }}>
       <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: C.ink }}>Which days will you train?</div>
       <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, margin: "6px 0 14px", lineHeight: 1.45 }}>Pick the weekdays for this program. You'll train your days <b>in order</b> — Day 1 on your first chosen day, Day 2 on the next, and so on — cycling through the week. ({program.days.length} training days set up.)</div>
+      {PERIODIZATION_INFO[program.progressionType] && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 12px", background: AI_BG, borderRadius: 10, marginBottom: 14 }}>
+          <Sparkles size={14} color={AI_ACC} style={{ flexShrink: 0, marginTop: 2 }} />
+          <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, lineHeight: 1.4 }}><b>Recommended: {program.daysPerWeek} days a week.</b> That's the pace this program's progression is tuned for — we've pre-picked a sensible spread below.</div>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 6, justifyContent: "space-between", marginBottom: 16 }}>
         {[1, 2, 3, 4, 5, 6, 0].map((wd) => { const on = pickDays.includes(wd); return (<button key={wd} onClick={() => toggleDay(wd)} style={{ flex: 1, height: 46, borderRadius: 11, border: `1.5px solid ${on ? ACC : C.line}`, background: on ? ACC : C.card, color: on ? "#fff" : C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 650, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{WD_LETTER[wd]}</button>); })}
       </div>
