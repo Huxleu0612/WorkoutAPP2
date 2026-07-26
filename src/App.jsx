@@ -7,6 +7,7 @@ import {
   Info, GripVertical,
 } from "lucide-react";
 import EXERCISES_DATA from "./data/exercises.json";
+import { PROGRAM_CATALOG } from "./data/programCatalog";
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
@@ -90,7 +91,7 @@ const dayIdCache = new WeakMap();
 let dayIdSeq = 0;
 const dayKey = (d) => { if (!dayIdCache.has(d)) dayIdCache.set(d, `day-${dayIdSeq++}`); return dayIdCache.get(d); };
 const N = (sets) => ({ id: null, sets, last: { w: 0, reps: 10, rir: "amber", logged: false } });
-const ex = (id, sets) => ({ ...N(sets), id });
+const ex = (id, sets, cfg) => ({ ...N(sets), id, ...cfg });
 
 /* dataset exercise ids used by the default programs below:
    0025 Barbell Bench Press · 0314 Dumbbell Incline Bench Press · 0662 Push-Up · 0027 Barbell Bent Over Row
@@ -98,19 +99,19 @@ const ex = (id, sets) => ({ ...N(sets), id });
    0085 Barbell Romanian Deadlift · 0336 Dumbbell Lunge · 0549 Kettlebell Swing · 0405 Dumbbell Seated Shoulder Press
    0334 Dumbbell Lateral Raise · 0294 Dumbbell Biceps Curl · 0060 Barbell Lying Triceps Extension Skull Crusher · plank Plank (custom) */
 const DEFAULT_PROGRAMS = [
-  { id: "p1", name: "Strength", style: "strength", progressionType: "rir", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
+  { id: "p1", name: "Strength", style: "strength", progressionType: "rir", tags: ["full body"], difficulty: "beginner", daysPerWeek: 4, weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
     { name: "Push", ex: [ex("0025", 4), ex("0405", 3), ex("0314", 3), ex("0060", 3)] },
     { name: "Pull", ex: [ex("0027", 4), ex("0652", 3), ex("0294", 3)] },
     { name: "Legs", ex: [ex("1436", 4), ex("0085", 3), ex("0336", 3)] },
     { name: "Full Body", ex: [ex("0549", 3), ex("0334", 3), ex("plank", 3)] },
   ] },
-  { id: "p2", name: "Hypertrophy", style: "hypertrophy", progressionType: "rir", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
+  { id: "p2", name: "Hypertrophy", style: "hypertrophy", progressionType: "rir", tags: ["body part split"], difficulty: "intermediate", daysPerWeek: 4, weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
     { name: "Chest & Triceps", ex: [ex("0314", 4), ex("0025", 3), ex("0060", 3), ex("0662", 2)] },
     { name: "Back & Biceps", ex: [ex("0292", 4), ex("0652", 3), ex("band_pull", 3), ex("0294", 3)] },
     { name: "Legs", ex: [ex("1436", 4), ex("0085", 4), ex("0336", 3)] },
     { name: "Shoulders & Arms", ex: [ex("0405", 4), ex("0334", 4), ex("0294", 3), ex("0060", 3)] },
   ] },
-  { id: "p3", name: "Conditioning", style: "conditioning", progressionType: "rir", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
+  { id: "p3", name: "Conditioning", style: "conditioning", progressionType: "rir", tags: ["conditioning", "full body"], difficulty: "beginner", daysPerWeek: 3, weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
     { name: "Circuit A", ex: [ex("0549", 4), ex("0336", 3), ex("0662", 3), ex("plank", 3)] },
     { name: "Circuit B", ex: [ex("1436", 3), ex("0292", 3), ex("0405", 3), ex("0549", 3)] },
     { name: "Circuit C", ex: [ex("0652", 3), ex("0662", 3), ex("0336", 3), ex("plank", 3)] },
@@ -118,6 +119,8 @@ const DEFAULT_PROGRAMS = [
 ];
 
 const RIR = { green: { c: C.green, bg: C.greenBg, label: "Easy", note: "3+ reps left" }, amber: { c: C.amber, bg: C.amberBg, label: "Working", note: "1–2 reps left" }, red: { c: C.red, bg: C.redBg, label: "Max", note: "0 reps left" } };
+const HITMISS = { hit: { c: C.green, bg: C.greenBg, label: "Hit", note: "Made the target reps" }, miss: { c: C.red, bg: C.redBg, label: "Miss", note: "Under the target" } };
+const ratingTable = (kind) => (kind === "hitmiss" ? HITMISS : RIR);
 const READINESS = [{ v: "energized", label: "Energized", Icon: Zap }, { v: "normal", label: "Normal", Icon: Activity }, { v: "tired", label: "Tired", Icon: Moon }];
 
 /* ===== program helpers (pause-aware) ===== */
@@ -621,8 +624,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
   const startWorkout = (idx) => {
     const d = active.days[idx];
     const init = {};
-    const strategy = progressionOf(active);
-    d.ex.forEach((exx, ei) => { const rec = strategy.recommend(exx, { lastReadiness: active.lastReadiness }); Array.from({ length: setCount(exx) }).forEach((_, si) => { init[`${ei}-${si}`] = { w: exx.last?.logged && exx.last.w > 0 ? wStr(rec.w, u) : "", reps: exx.last?.logged ? String(exx.last.reps || 10) : "" }; }); });
+    d.ex.forEach((exx, ei) => { const rec = progressionOf(active, exx).recommend(exx, { lastReadiness: active.lastReadiness, program: active }); Array.from({ length: setCount(exx) }).forEach((_, si) => { init[`${ei}-${si}`] = { w: exx.last?.logged && exx.last.w > 0 ? wStr(rec.w, u) : "", reps: exx.last?.logged ? String(exx.last.reps || 10) : "" }; }); });
     setDraft({ programId: active.id, dayIdx: idx, dateKey: ymd(new Date()), setData: init, done: {}, startedAt: new Date().toISOString() });
     setOpenRating(null); setConfirmDiscard(false); setPhase("active");
   };
@@ -633,7 +635,6 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
   const finish = (readiness) => {
     const idx = live.dayIdx, sdAll = live.setData, dn = live.done;
     const sets = [];
-    const strategy = progressionOf(active);
     const newDays = active.days.map((d, di) => {
       if (di !== idx) return d;
       return { ...d, ex: d.ex.map((exx, ei) => {
@@ -641,7 +642,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
         if (!rated.length) return exx;
         const loggedSets = rated.map((k) => { const sd = sdAll[k] || {}; return { w: parseFloat(sd.w) || 0, reps: parseInt(sd.reps) || 0, rating: dn[k] }; });
         loggedSets.forEach((s) => sets.push({ exId: exx.id, w: s.w, reps: s.reps, rir: s.rating }));
-        const patch = strategy.finishExercise(exx, loggedSets, { isBodyweight: isBW(exx.id) });
+        const patch = progressionOf(active, exx).finishExercise(exx, loggedSets, { isBodyweight: isBW(exx.id), program: active });
         return patch ? { ...exx, ...patch } : exx;
       }) };
     });
@@ -796,7 +797,10 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
         <span style={{ fontFamily: SANS, fontSize: 11.5, color: C.amber, background: C.amberBg, padding: "3px 9px", borderRadius: 6 }}>Saved as you go</span>
       </div>
       {day.ex.map((exx, ei) => {
-        const rec = progressionOf(active).recommend(exx, { lastReadiness: active.lastReadiness });
+        const strategy = progressionOf(active, exx);
+        const rec = strategy.recommend(exx, { lastReadiness: active.lastReadiness, program: active });
+        const ratings = ratingTable(strategy.setRatingKind);
+        const ratingKeys = Object.keys(ratings);
         const Arrow = rec.dir === "up" ? ArrowUp : rec.dir === "down" ? ArrowDown : ArrowRight;
         const dirColor = rec.dir === "up" ? C.green : rec.dir === "down" ? C.red : C.sub;
         const bw = isBW(exx.id);
@@ -831,11 +835,11 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
                     <div style={{ flex: 1, textAlign: "center", fontFamily: MONO, fontSize: 12, color: C.faint }}>{prev}</div>
                     <div style={cell}><input inputMode="decimal" placeholder={bw ? "BW" : "—"} value={sd.w || ""} onChange={(e) => upd(key, "w", e.target.value)} style={inp} /></div>
                     <div style={cell}><input inputMode="numeric" placeholder="—" value={sd.reps || ""} onChange={(e) => upd(key, "reps", e.target.value)} style={inp} /></div>
-                    <button onClick={() => setOpenRating(openRating === key ? null : key)} style={{ width: 48, height: 44, borderRadius: 10, cursor: "pointer", border: rated ? "none" : `1.5px solid ${C.line}`, background: rated ? RIR[rated].c : C.card, display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }}><Check size={18} color={rated ? "#fff" : C.faint} strokeWidth={rated ? 3 : 2.4} /></button>
+                    <button onClick={() => setOpenRating(openRating === key ? null : key)} style={{ width: 48, height: 44, borderRadius: 10, cursor: "pointer", border: rated ? "none" : `1.5px solid ${C.line}`, background: rated ? ratings[rated].c : C.card, display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }}><Check size={18} color={rated ? "#fff" : C.faint} strokeWidth={rated ? 3 : 2.4} /></button>
                   </div>
                   {openRating === key && (
-                    <div style={{ padding: "4px 0 10px" }}><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, letterSpacing: 1, marginBottom: 8 }}>HOW HARD WAS THAT SET?</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>{["green", "amber", "red"].map((cc) => (<button key={cc} onClick={() => { rate(key, cc); setOpenRating(null); }} style={{ height: 60, borderRadius: 12, border: "none", background: RIR[cc].bg, cursor: "pointer", WebkitTapHighlightColor: "transparent", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}><div style={{ width: 15, height: 15, borderRadius: 8, background: RIR[cc].c }} /><span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 650, color: RIR[cc].c }}>{RIR[cc].label}</span><span style={{ fontFamily: MONO, fontSize: 8.5, color: RIR[cc].c, opacity: .85 }}>{RIR[cc].note}</span></button>))}</div>
+                    <div style={{ padding: "4px 0 10px" }}><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, letterSpacing: 1, marginBottom: 8 }}>{strategy.setRatingKind === "hitmiss" ? "DID YOU HIT THE TARGET REPS?" : "HOW HARD WAS THAT SET?"}</div>
+                      <div style={{ display: "grid", gridTemplateColumns: ratingKeys.map(() => "1fr").join(" "), gap: 8 }}>{ratingKeys.map((cc) => (<button key={cc} onClick={() => { rate(key, cc); setOpenRating(null); }} style={{ height: 60, borderRadius: 12, border: "none", background: ratings[cc].bg, cursor: "pointer", WebkitTapHighlightColor: "transparent", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}><div style={{ width: 15, height: 15, borderRadius: 8, background: ratings[cc].c }} /><span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 650, color: ratings[cc].c }}>{ratings[cc].label}</span><span style={{ fontFamily: MONO, fontSize: 8.5, color: ratings[cc].c, opacity: .85 }}>{ratings[cc].note}</span></button>))}</div>
                     </div>
                   )}
                 </div>
@@ -856,24 +860,85 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
   );
 }
 
+const tagPill = (color, bg) => ({ fontFamily: MONO, fontSize: 9.5, color, background: bg, padding: "3px 8px", borderRadius: 6, letterSpacing: 0.3, whiteSpace: "nowrap" });
+function catalogIcon(tags) {
+  if (tags.includes("push/pull/legs")) return Activity;
+  if (tags.includes("upper/lower")) return Layers;
+  if (tags.includes("body part split")) return Target;
+  if (tags.includes("531") || tags.includes("gzcl")) return BarChart3;
+  if (tags.includes("powerlifting")) return Dumbbell;
+  return Zap;
+}
+function CatalogCard({ template, added, onOpen }) {
+  const Icon = catalogIcon(template.tags);
+  return (
+    <button onClick={onOpen} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 14, marginBottom: 10, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+      <div style={{ width: 46, height: 46, borderRadius: 12, background: ACC_BG, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon size={20} color={ACC} /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 650, color: C.ink }}>{template.name}</span>
+          {added && <span style={tagPill(C.green, C.greenBg)}>ADDED</span>}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 6 }}>
+          <span style={tagPill(ACC, ACC_BG)}>{cap(template.difficulty)}</span>
+          {template.tags.slice(0, 2).map((t) => <span key={t} style={tagPill(C.sub, C.page)}>{cap(t)}</span>)}
+        </div>
+        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.faint, marginTop: 6 }}>{template.weeks} wks · {template.daysPerWeek} days/wk</div>
+      </div>
+      <ChevronRight size={20} color={C.faint} style={{ flexShrink: 0 }} />
+    </button>
+  );
+}
+const PROGRAM_LIBRARY_LIMIT = 20;
 function Programs({ programs, setPrograms, history, go }) {
   const [openId, setOpenId] = useState(null);
   const [info, setInfo] = useState(null);
+  const [q, setQ] = useState("");
+  const [tagFilter, setTagFilter] = useState("All");
+  const [daysFilter, setDaysFilter] = useState("All");
   const startProgram = (id, scheduleDays) => setPrograms(programs.map((p) => p.id === id ? { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0, scheduleDays } : { ...p, active: false }));
   const pauseProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, pausedAt: new Date().toISOString() } : p));
   const resumeProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, pausedMs: (p.pausedMs || 0) + (Date.now() - new Date(p.pausedAt).getTime()), pausedAt: null } : p));
   const stopProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, active: false, pausedAt: null } : p));
   const restartProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0 } : { ...p, active: false }));
   const createProgram = () => { const id = "p" + Date.now(); setPrograms([...programs, { id, name: "New Program", style: "custom", progressionType: "rir", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [] }]); setOpenId(id); };
+  const addFromTemplate = (template) => {
+    const existing = programs.find((p) => p.sourceTemplateId === template.templateId);
+    if (existing) { setOpenId(existing.id); return; }
+    const id = "p" + Date.now();
+    setPrograms([...programs, {
+      id, name: template.name, style: template.style, progressionType: template.progressionType,
+      tags: template.tags, difficulty: template.difficulty, daysPerWeek: template.daysPerWeek,
+      linearConfig: template.linearConfig, weeks: template.weeks, sourceTemplateId: template.templateId,
+      active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal",
+      days: template.days.map((d) => ({ name: d.name, ex: d.ex.map((e) => ({ ...e, last: { ...e.last } })) })),
+    }]);
+    setOpenId(id);
+  };
 
   if (openId) {
     const p = programs.find((x) => x.id === openId);
     if (!p) { setOpenId(null); return null; }
     return <ProgramDetail program={p} onBack={() => setOpenId(null)} onChange={(np) => setPrograms(programs.map((x) => x.id === openId ? np : x))} onDelete={() => { setPrograms(programs.filter((x) => x.id !== openId)); setOpenId(null); }} onStart={(sd) => startProgram(openId, sd)} onPause={() => pauseProgram(openId)} onResume={() => resumeProgram(openId)} onStop={() => stopProgram(openId)} onRestart={() => restartProgram(openId)} />;
   }
+
+  const tagOptions = ["All", ...Array.from(new Set(PROGRAM_CATALOG.flatMap((p) => p.tags))).sort()];
+  const dayOptions = ["All", ...Array.from(new Set(PROGRAM_CATALOG.map((p) => p.daysPerWeek))).sort((a, b) => a - b)];
+  const matchesQuery = (t) => {
+    if (!q) return true;
+    const lq = q.toLowerCase();
+    if (t.name.toLowerCase().includes(lq)) return true;
+    if (t.tags.some((tag) => tag.toLowerCase().includes(lq))) return true;
+    return t.days.some((d) => d.ex.some((e) => exName(e.id).toLowerCase().includes(lq)));
+  };
+  const filtered = PROGRAM_CATALOG.filter((t) => matchesQuery(t) && (tagFilter === "All" || t.tags.includes(tagFilter)) && (daysFilter === "All" || t.daysPerWeek === daysFilter));
+  const shownCatalog = filtered.slice(0, PROGRAM_LIBRARY_LIMIT);
+
   return (
     <div style={{ padding: "6px 18px 24px" }}>
       <PageTitle sub="Workout styles · pick any">Programs</PageTitle>
+
+      <SectionLabel>Your programs</SectionLabel>
       {programs.map((p, i) => {
         const runs = sessionsFor(history, p.id).length;
         const meta = isPaused(p) ? `Paused · week ${programWeek(p)}` : p.active ? `Active · week ${programWeek(p)}` : p.startedAt ? `Stopped · ${runs} logged` : "Not started";
@@ -890,7 +955,18 @@ function Programs({ programs, setPrograms, history, go }) {
           </div>
         );
       })}
-      <button onClick={createProgram} style={{ width: "100%", height: 54, borderRadius: 13, border: `1.5px dashed ${C.line}`, background: C.card, color: ACC, fontFamily: SANS, fontSize: 15, fontWeight: 650, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 4, WebkitTapHighlightColor: "transparent" }}><Plus size={18} strokeWidth={2.5} /> Create new program</button>
+
+      <div style={{ height: 6 }} />
+      <SectionLabel>Programs library</SectionLabel>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, border: `1.5px solid ${C.line}`, borderRadius: 13, padding: "0 14px", height: 54, marginBottom: 12 }}><Search size={18} color={C.faint} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search programs or exercises" style={{ border: "none", outline: "none", fontFamily: SANS, fontSize: 16, flex: 1, color: C.ink, background: "transparent" }} />{q && <X size={18} color={C.faint} onClick={() => setQ("")} style={{ cursor: "pointer" }} />}</div>
+      <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 8, paddingBottom: 2 }}>{tagOptions.map((t) => (<button key={t} onClick={() => setTagFilter(t)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${tagFilter === t ? C.ink : C.line}`, background: tagFilter === t ? C.ink : C.card, color: tagFilter === t ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{t === "All" ? t : cap(t)}</button>))}</div>
+      <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 16, paddingBottom: 2 }}>{dayOptions.map((d) => (<button key={d} onClick={() => setDaysFilter(d)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${daysFilter === d ? C.ink : C.line}`, background: daysFilter === d ? C.ink : C.card, color: daysFilter === d ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{d === "All" ? "All" : `${d} Days`}</button>))}</div>
+
+      {shownCatalog.map((t) => <CatalogCard key={t.templateId} template={t} added={programs.some((p) => p.sourceTemplateId === t.templateId)} onOpen={() => addFromTemplate(t)} />)}
+      {filtered.length > PROGRAM_LIBRARY_LIMIT && <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.faint, textAlign: "center", padding: "4px 0 12px" }}>Showing {PROGRAM_LIBRARY_LIMIT} of {filtered.length} — keep typing to narrow it down.</div>}
+      {filtered.length === 0 && <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, textAlign: "center", padding: "16px 0" }}>No programs match "{q}".</div>}
+
+      <button onClick={createProgram} style={{ width: "100%", height: 54, borderRadius: 13, border: `1.5px dashed ${C.line}`, background: C.card, color: ACC, fontFamily: SANS, fontSize: 15, fontWeight: 650, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 4, WebkitTapHighlightColor: "transparent" }}><Plus size={18} strokeWidth={2.5} /> Create your own program</button>
       {info && <InfoModal styleKey={info} onClose={() => setInfo(null)} />}
     </div>
   );
