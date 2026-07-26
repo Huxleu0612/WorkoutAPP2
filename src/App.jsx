@@ -953,7 +953,6 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
   const [info, setInfo] = useState(null);
   const [q, setQ] = useState("");
   const [tagFilter, setTagFilter] = useState("All");
-  const [daysFilter, setDaysFilter] = useState("All");
   const startProgram = (id, scheduleDays, periodization) => setPrograms(programs.map((p) => {
     if (p.id === id) return { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0, completedAt: null, scheduleDays, ...(periodization ? { periodization } : {}) };
     if (p.active) return { ...p, active: false, pausedAt: null, completedAt: new Date().toISOString() };
@@ -986,7 +985,6 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
   }
 
   const tagOptions = ["All", ...Array.from(new Set(PROGRAM_CATALOG.flatMap((p) => p.tags))).sort()];
-  const dayOptions = ["All", ...Array.from(new Set(PROGRAM_CATALOG.map((p) => p.daysPerWeek))).sort((a, b) => a - b)];
   const matchesQuery = (t) => {
     if (!q) return true;
     const lq = q.toLowerCase();
@@ -994,7 +992,7 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
     if (t.tags.some((tag) => tag.toLowerCase().includes(lq))) return true;
     return t.days.some((d) => d.ex.some((e) => exName(e.id).toLowerCase().includes(lq)));
   };
-  const filtered = PROGRAM_CATALOG.filter((t) => matchesQuery(t) && (tagFilter === "All" || t.tags.includes(tagFilter)) && (daysFilter === "All" || t.daysPerWeek === daysFilter));
+  const filtered = PROGRAM_CATALOG.filter((t) => matchesQuery(t) && (tagFilter === "All" || t.tags.includes(tagFilter)));
   const shownCatalog = filtered.slice(0, PROGRAM_LIBRARY_LIMIT);
 
   const activeProg = programs.find((p) => p.active) || null;
@@ -1047,8 +1045,9 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
       <div style={{ height: 6 }} />
       <SectionLabel>Programs library</SectionLabel>
       <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, border: `1.5px solid ${C.line}`, borderRadius: 13, padding: "0 14px", height: 54, marginBottom: 12 }}><Search size={18} color={C.faint} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search programs or exercises" style={{ border: "none", outline: "none", fontFamily: SANS, fontSize: 16, flex: 1, height: "100%", color: C.ink, background: "transparent" }} />{q && <X size={18} color={C.faint} onClick={() => setQ("")} style={{ cursor: "pointer" }} />}</div>
-      <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 8, paddingBottom: 2 }}>{tagOptions.map((t) => (<button key={t} onClick={() => setTagFilter(t)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${tagFilter === t ? C.ink : C.line}`, background: tagFilter === t ? C.ink : C.card, color: tagFilter === t ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{t === "All" ? t : cap(t)}</button>))}</div>
-      <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 16, paddingBottom: 2 }}>{dayOptions.map((d) => (<button key={d} onClick={() => setDaysFilter(d)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${daysFilter === d ? C.ink : C.line}`, background: daysFilter === d ? C.ink : C.card, color: daysFilter === d ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{d === "All" ? "All" : `${d} Days`}</button>))}</div>
+      <select value={tagFilter} onChange={(e) => setTagFilter(e.target.value)} style={{ width: "100%", height: 48, borderRadius: 13, border: `1.5px solid ${C.line}`, background: C.card, padding: "0 14px", fontFamily: SANS, fontSize: 14, fontWeight: 550, color: C.ink, marginBottom: 16, outline: "none", cursor: "pointer" }}>
+        {tagOptions.map((t) => <option key={t} value={t}>{t === "All" ? "All types" : cap(t)}</option>)}
+      </select>
 
       {shownCatalog.map((t) => <CatalogCard key={t.templateId} template={t} added={programs.some((p) => p.sourceTemplateId === t.templateId)} onOpen={() => addFromTemplate(t)} />)}
       {filtered.length > PROGRAM_LIBRARY_LIMIT && <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.faint, textAlign: "center", padding: "4px 0 12px" }}>Showing {PROGRAM_LIBRARY_LIMIT} of {filtered.length} — keep typing to narrow it down.</div>}
