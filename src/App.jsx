@@ -4,7 +4,7 @@ import {
   Home, Dumbbell, Layers, User, Plus, Minus, Check, ChevronLeft, ChevronRight,
   Search, X, TrendingDown, ArrowUp, ArrowRight, ArrowDown, Zap, Activity, Moon,
   Play, Pause, Square, Trash2, RotateCcw, BarChart3, Clock, Pencil, Target, Calendar,
-  Info, GripVertical, Calculator, Settings2,
+  Info, GripVertical, Calculator, Settings2, Sparkles,
 } from "lucide-react";
 import EXERCISES_DATA from "./data/exercises.json";
 import { PROGRAM_CATALOG } from "./data/programCatalog";
@@ -23,6 +23,7 @@ const C = {
   greenBg: "#E7F5EC", amberBg: "#FBF0DE", redBg: "#FBE9E9",
 };
 const ACC = "#2F6BFF", ACC_BG = "#E9F0FF";
+const AI_ACC = "#7C3AED", AI_BG = "#F1EBFF", AI_BORDER = "#DDD0FF";
 const MONO = "'SF Mono','JetBrains Mono','Roboto Mono',ui-monospace,monospace";
 const SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,system-ui,sans-serif";
 const VER = 6;
@@ -871,24 +872,79 @@ function catalogIcon(tags) {
   if (tags.includes("powerlifting")) return Dumbbell;
   return Zap;
 }
+
+/* Programs whose week-to-week numbers are computed from your own logged history — a real training
+   max/stage state machine, not just the same generic rep-target/RIR engine with different exercises.
+   Surfaced on the catalog card and in ProgramDetail as a distinct "Adaptive" badge. */
+const PERIODIZATION_INFO = {
+  "531": {
+    label: "Adaptive · Training max",
+    what: "Four lifts — squat, bench, deadlift, overhead press — each trained once a week across a 4-day split, with one accessory exercise per day.",
+    how: "Every set's weight comes from a training max you enter before starting (roughly 90% of your true 1-rep max). Each 4-week wave runs a 5s week, a 3s week, a 1s week, then a lighter deload week, with the last working set of the first three weeks as an all-out AMRAP set. Once a wave finishes, your training max automatically goes up for the next one (+5kg squat/deadlift, +2.5kg bench/OHP) — no re-testing your max.",
+  },
+  nsuns: {
+    label: "Adaptive · Training max",
+    what: "A high-frequency 4-day split where each main lift doubles as a secondary lift on another day, so every lift gets worked twice a week.",
+    how: "Every set's weight is a percentage of a training max you enter before starting. Unlike standard 5/3/1, that max increases every single week — not every 4 weeks — for faster week-to-week progression (+5kg squat/deadlift, +2.5kg bench/OHP). The main lift runs 9 sets from 65% up to a top AMRAP set at 85%, then back down; the secondary lift runs 5 lighter sets.",
+  },
+  gzclp: {
+    label: "Adaptive · Learns from your history",
+    what: "A 4-day tiered program where each of the 4 main lifts is the primary lift on one day and a secondary lift on another, plus a light accessory lift each day.",
+    how: "Instead of a fixed plan, GZCLP reads what actually happened last session for each lift and adjusts automatically. The primary lift runs 5×3+ → 6×2+ → 10×1+: hit every rep and the weight goes up next time on the same stage; miss and it moves to the next stage instead of stalling. Miss the hardest stage and it deloads 10% and resets to stage one. The secondary lift follows the same stage logic at lower volume (3×10 → 3×8 → 3×6), and the accessory lift simply adds weight once a set clears 25 reps.",
+  },
+};
+function ProgressionInfoModal({ template, onClose }) {
+  const info = PERIODIZATION_INFO[template.progressionType];
+  if (!info) return null;
+  const L = ({ children }) => <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.2, color: C.faint, marginBottom: 5 }}>{children}</div>;
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(10,12,16,0.55)", zIndex: 55, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "20px 20px 0 0", padding: "18px 20px 34px", maxHeight: "82vh", overflowY: "auto" }}>
+        <div style={{ width: 38, height: 4, borderRadius: 2, background: C.line, margin: "0 auto 16px" }} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ fontFamily: SANS, fontSize: 20, fontWeight: 720, color: C.ink, margin: 0 }}>{template.name}</h2>
+          <button onClick={onClose} style={miniRound}><X size={18} /></button>
+        </div>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: MONO, fontSize: 11, color: AI_ACC, letterSpacing: .4, marginTop: 8, background: AI_BG, padding: "4px 10px", borderRadius: 7 }}><Sparkles size={12} /> {info.label.toUpperCase()}</div>
+        <div style={{ marginTop: 16, marginBottom: 14 }}>
+          <L>HOW THE PROGRAM IS STRUCTURED</L>
+          <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>{info.what}</div>
+        </div>
+        <div>
+          <L>HOW THE PROGRESSION WORKS</L>
+          <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>{info.how}{template.bbbVolume ? " Boring But Big also tacks on 5 extra sets of 10 reps at 50% of your training max after the main work, for added size." : ""}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CatalogCard({ template, added, onOpen }) {
   const Icon = catalogIcon(template.tags);
+  const [showInfo, setShowInfo] = useState(false);
+  const adaptive = PERIODIZATION_INFO[template.progressionType];
   return (
-    <button onClick={onOpen} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 14, marginBottom: 10, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
-      <div style={{ width: 46, height: 46, borderRadius: 12, background: ACC_BG, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon size={20} color={ACC} /></div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 650, color: C.ink }}>{template.name}</span>
-          {added && <span style={tagPill(C.green, C.greenBg)}>ADDED</span>}
+    <>
+      <div onClick={onOpen} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${adaptive ? AI_BORDER : C.line}`, borderRadius: 14, padding: 14, marginBottom: 10, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+        <div style={{ width: 46, height: 46, borderRadius: 12, background: adaptive ? AI_BG : ACC_BG, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon size={20} color={adaptive ? AI_ACC : ACC} /></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 650, color: C.ink }}>{template.name}</span>
+            {added && <span style={tagPill(C.green, C.greenBg)}>ADDED</span>}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 6, alignItems: "center" }}>
+            {adaptive && (
+              <button onClick={(e) => { e.stopPropagation(); setShowInfo(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: AI_BG, color: AI_ACC, border: "none", borderRadius: 6, padding: "3px 8px", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: 0.3, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}><Sparkles size={11} /> Adaptive</button>
+            )}
+            <span style={tagPill(ACC, ACC_BG)}>{cap(template.difficulty)}</span>
+            {template.tags.slice(0, 2).map((t) => <span key={t} style={tagPill(C.sub, C.page)}>{cap(t)}</span>)}
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.faint, marginTop: 6 }}>{template.weeks} wks · {template.daysPerWeek} days/wk</div>
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 6 }}>
-          <span style={tagPill(ACC, ACC_BG)}>{cap(template.difficulty)}</span>
-          {template.tags.slice(0, 2).map((t) => <span key={t} style={tagPill(C.sub, C.page)}>{cap(t)}</span>)}
-        </div>
-        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.faint, marginTop: 6 }}>{template.weeks} wks · {template.daysPerWeek} days/wk</div>
+        <ChevronRight size={20} color={C.faint} style={{ flexShrink: 0 }} />
       </div>
-      <ChevronRight size={20} color={C.faint} style={{ flexShrink: 0 }} />
-    </button>
+      {showInfo && <ProgressionInfoModal template={template} onClose={() => setShowInfo(false)} />}
+    </>
   );
 }
 const PROGRAM_LIBRARY_LIMIT = 20;
@@ -957,8 +1013,8 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
           <div onClick={() => setOpenId(p.id)} style={{ flex: 1, cursor: "pointer" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontFamily: SANS, fontSize: 18, fontWeight: 650, color: C.ink }}>{p.name}</span>
-              {p.active && <span style={{ fontFamily: MONO, fontSize: 9, background: isPaused(p) ? C.amber : ACC, color: "#fff", padding: "2px 7px", borderRadius: 5, letterSpacing: .5 }}>{isPaused(p) ? "PAUSED" : "ACTIVE"}</span>}
-              {p.completedAt && <span style={{ fontFamily: MONO, fontSize: 9, background: C.page, color: C.faint, padding: "2px 7px", borderRadius: 5, letterSpacing: .5 }}>DONE</span>}
+              {p.active && <span style={{ fontFamily: MONO, fontSize: 10, background: isPaused(p) ? C.amber : ACC, color: "#fff", padding: "2px 7px", borderRadius: 5, letterSpacing: .5 }}>{isPaused(p) ? "PAUSED" : "ACTIVE"}</span>}
+              {p.completedAt && <span style={{ fontFamily: MONO, fontSize: 10, background: C.page, color: C.faint, padding: "2px 7px", borderRadius: 5, letterSpacing: .5 }}>DONE</span>}
             </div>
             <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub, marginTop: 4 }}>{meta} · {p.days.length} day{p.days.length !== 1 ? "s" : ""}</div></div>
           <button onClick={() => setInfo(p.style || "custom")} style={{ ...miniRound, border: "none", background: C.page }}><Info size={18} color={C.sub} /></button>
@@ -1013,6 +1069,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
   const [pending, setPending] = useState(null); // 'pause'|'complete'|'restart'|'delete'|'switch'
   const [pendingScheduleDays, setPendingScheduleDays] = useState(null);
   const [info, setInfo] = useState(false);
+  const [progInfo, setProgInfo] = useState(false);
   const [pickDays, setPickDays] = useState(program.scheduleDays?.length ? program.scheduleDays : (DEFAULT_DAYS[Math.min(7, Math.max(1, program.days.length || 3))] || [1, 3, 5]));
   const [detail, setDetail] = useState(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -1106,6 +1163,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
       <Eyebrow>{paused ? `Paused · week ${programWeek(program)}` : program.active ? `Active · ${strategy.weekLabel(program, { sessionCount: sessionsFor(history, program.id).length, program }) || `${durStr(program)} in`}` : program.completedAt ? `Completed ${fmtDate(program.completedAt)}` : program.startedAt ? "Stopped" : "Not started"}</Eyebrow>
       <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0 14px" }}>
         <input value={program.name} onChange={(e) => rename(e.target.value)} style={{ flex: 1, minWidth: 0, fontFamily: SANS, fontSize: 28, fontWeight: 700, color: C.ink, letterSpacing: -0.6, border: "none", outline: "none", background: "transparent", borderBottom: `1.5px dashed ${C.line}`, paddingBottom: 4 }} />
+        {PERIODIZATION_INFO[program.progressionType] && <button onClick={() => setProgInfo(true)} style={{ ...miniRound, border: "none", background: AI_BG }}><Sparkles size={18} color={AI_ACC} /></button>}
         <button onClick={() => setInfo(true)} style={{ ...miniRound, border: "none", background: C.page }}><Info size={18} color={C.sub} /></button>
       </div>
 
@@ -1180,6 +1238,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
         <button onClick={() => setPending("delete")} style={{ width: "100%", height: 50, borderRadius: 13, border: `1.5px solid ${C.line}`, background: C.card, color: C.red, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7, WebkitTapHighlightColor: "transparent" }}><Trash2 size={15} /> Delete program</button>
       )}
       {info && <InfoModal styleKey={program.style || "custom"} onClose={() => setInfo(false)} />}
+      {progInfo && <ProgressionInfoModal template={program} onClose={() => setProgInfo(false)} />}
       {detail && <ExerciseDetail exercise={detail} onClose={() => setDetail(null)} />}
     </div>
   );
