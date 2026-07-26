@@ -195,14 +195,13 @@ export const PROGRAM_CATALOG = [
     ],
   },
   {
-    templateId: "cat_gzclp", name: "GZCLP", style: "strength", progressionType: "linear",
+    templateId: "cat_gzclp", name: "GZCLP", style: "strength", progressionType: "gzclp",
     tags: ["gzcl", "tiered"], difficulty: "intermediate", daysPerWeek: 4, weeks: 16,
-    linearConfig: { targetReps: 3, incrementKg: 2.5, failsToDeload: 3, deloadPct: 0.85 },
     days: [
-      { name: "Day A", ex: [ex(SQUAT, 5, { incrementKg: 5, tier: "T1" }), ex(BENCH, 3, { tier: "T2" }), ex(LAT_PULLDOWN, 3, { progressionType: "rir", tier: "T3" })] },
-      { name: "Day B", ex: [ex(OHP, 5, { tier: "T1" }), ex(DEADLIFT, 3, { incrementKg: 5, tier: "T2" }), ex(DB_HAMMER_CURL, 3, { progressionType: "rir", tier: "T3" })] },
-      { name: "Day C", ex: [ex(BENCH, 5, { tier: "T1" }), ex(SQUAT, 3, { incrementKg: 5, tier: "T2" }), ex(TRICEPS_PUSHDOWN, 3, { progressionType: "rir", tier: "T3" })] },
-      { name: "Day D", ex: [ex(DEADLIFT, 5, { incrementKg: 5, tier: "T1" }), ex(OHP, 3, { tier: "T2" }), ex(CHINUP, 3, { progressionType: "rir", tier: "T3" })] },
+      { name: "Day A", ex: [ex(SQUAT, 5, { liftKey: "squat", tier: "T1" }), ex(BENCH, 3, { liftKey: "bench", tier: "T2" }), ex(LAT_PULLDOWN, 3, { tier: "T3" })] },
+      { name: "Day B", ex: [ex(OHP, 5, { liftKey: "ohp", tier: "T1" }), ex(DEADLIFT, 3, { liftKey: "deadlift", tier: "T2" }), ex(DB_HAMMER_CURL, 3, { tier: "T3" })] },
+      { name: "Day C", ex: [ex(BENCH, 5, { liftKey: "bench", tier: "T1" }), ex(SQUAT, 3, { liftKey: "squat", tier: "T2" }), ex(TRICEPS_PUSHDOWN, 3, { tier: "T3" })] },
+      { name: "Day D", ex: [ex(DEADLIFT, 5, { liftKey: "deadlift", tier: "T1" }), ex(OHP, 3, { liftKey: "ohp", tier: "T2" }), ex(CHINUP, 3, { tier: "T3" })] },
     ],
   },
 ];

@@ -181,7 +181,78 @@ const wave531 = {
   },
 };
 
-export const STRATEGIES = { rir, linear, nsuns, "531": wave531 };
+/* ===== gzclp: tiered stage/miss-streak engine =====
+   Unlike nsuns/531 above, GZCLP's "current week" isn't derivable from session count — whether a
+   lift moves forward or resets a stage depends on whether the last AMRAP/rep target was actually
+   hit, so each exercise entry carries its own small state machine in exx.periodization ({ stage,
+   weight }), advanced by finishExercise every time that exercise is logged. T1/T2/T3 are three
+   independent tiers — a lift used as T1 on one day and T2 on another progresses separately, since
+   each exercise entry (not each lift) owns its own stage/weight. */
+const T1_STAGES = [{ sets: 5, reps: 3 }, { sets: 6, reps: 2 }, { sets: 10, reps: 1 }];
+const T1_LABEL = ["5×3+", "6×2+", "10×1+"];
+const T2_STAGES = [{ reps: 10 }, { reps: 8 }, { reps: 6 }];
+const T2_LABEL = ["3×10", "3×8", "3×6"];
+const T3_FLOOR_REPS = 15;
+const T3_BONUS_REPS = 25;
+const T3_INCREMENT_KG = 2.5;
+const STAGE_RESET_PCT = 0.9;
+
+const gzclpWeight = (exx) => exx.periodization?.weight || 0;
+const gzclpStage = (exx) => exx.periodization?.stage || 1;
+
+const gzclp = {
+  setRatingKind: "log",
+  editable: { sets: false, exercises: false },
+  needsMaxes: false,
+  getSetSpecs(exx) {
+    const stage = gzclpStage(exx);
+    if (exx.tier === "T2") return Array.from({ length: 3 }, () => ({ reps: T2_STAGES[stage - 1].reps, kind: "fixed" }));
+    if (exx.tier === "T3") return Array.from({ length: 3 }, () => ({ reps: T3_FLOOR_REPS, kind: "amrap" }));
+    const { sets, reps } = T1_STAGES[stage - 1];
+    return Array.from({ length: sets }, (_, i) => ({ reps, kind: i === sets - 1 ? "amrap" : "fixed" }));
+  },
+  effectiveTM(exx) {
+    return gzclpWeight(exx);
+  },
+  weightForSpec(tm) {
+    return round5(tm);
+  },
+  recommend(exx) {
+    const w = gzclpWeight(exx);
+    if (!w) return { first: true, w: null, dir: "hold", action: "First session", note: "Enter the weight you use — it becomes your stage 1 starting point." };
+    const stage = gzclpStage(exx);
+    if (exx.tier === "T3") return { first: false, w, dir: "up", action: `${w}kg`, note: `3×${T3_FLOOR_REPS}+ — add ${T3_INCREMENT_KG}kg once your last set hits ${T3_BONUS_REPS}+ reps.` };
+    const label = exx.tier === "T2" ? T2_LABEL[stage - 1] : T1_LABEL[stage - 1];
+    return { first: false, w, dir: "up", action: `${w}kg · Stage ${stage}`, note: `${label} — hit every rep and next session adds ${increment(exx)}kg. Miss and it moves to the next stage.` };
+  },
+  finishExercise(exx, loggedSets) {
+    if (!loggedSets.length) return null;
+    const last = loggedSets[loggedSets.length - 1];
+    if (!exx.periodization?.weight) {
+      return { last: { w: last.w, reps: last.reps, logged: true }, periodization: { stage: 1, weight: loggedSets[0].w || last.w } };
+    }
+    const stage = gzclpStage(exx);
+    const w = gzclpWeight(exx);
+    const inc = increment(exx);
+    let success;
+    if (exx.tier === "T2") success = loggedSets.every((s) => s.reps >= T2_STAGES[stage - 1].reps);
+    else if (exx.tier === "T3") success = last.reps >= T3_BONUS_REPS;
+    else success = last.reps >= T1_STAGES[stage - 1].reps;
+
+    let stage2, weight2;
+    if (exx.tier === "T3") { stage2 = stage; weight2 = success ? round5(w + T3_INCREMENT_KG) : w; }
+    else if (success) { stage2 = stage; weight2 = round5(w + inc); }
+    else if (stage < 3) { stage2 = stage + 1; weight2 = w; }
+    else { stage2 = 1; weight2 = round5(w * STAGE_RESET_PCT); }
+
+    return { last: { w: last.w, reps: last.reps, logged: true }, periodization: { stage: stage2, weight: weight2 } };
+  },
+  weekLabel() {
+    return null;
+  },
+};
+
+export const STRATEGIES = { rir, linear, nsuns, "531": wave531, gzclp };
 
 export function progressionOf(program, exx) {
   const type = exx?.progressionType || program?.progressionType;
