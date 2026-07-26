@@ -10,6 +10,7 @@ import EXERCISES_DATA from "./data/exercises.json";
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
+import { progressionOf } from "./lib/progression";
 
 /* ===== TOKENS ===== */
 const C = {
@@ -37,7 +38,6 @@ function usePersist(key, initial) {
 const KG_TO_LB = 2.20462;
 const fmtW = (kg, u) => (u === "lb" ? kg * KG_TO_LB : kg);
 const wStr = (kg, u) => fmtW(kg, u).toFixed(1);
-const round5 = (v) => Math.round(v / 2.5) * 2.5;
 const commas = (n) => Math.round(n).toLocaleString();
 
 /* ===== dates (device-local = user's timezone) ===== */
@@ -74,24 +74,7 @@ function deriveGoal(profile, curKg) {
   return { type, mag, weeklyRate, cur, goal };
 }
 
-/* ===== progression logic ===== */
-function recommend(last, lastReadiness, todayReadiness) {
-  const BAND = "8–12";
-  if (!last || last.logged === false)
-    return { first: true, w: null, band: BAND, dir: "hold", action: "First session", note: "Enter the weight you use — it becomes your baseline. No target yet.", lastRir: null };
-  if (last.w === 0)
-    return { w: 0, band: `${last.reps + 1}`, dir: "up", action: "Add a rep", note: "Bodyweight — chase one more clean rep.", lastRir: last.rir };
-  let out;
-  if (last.rir === "green") out = { w: round5(last.w + 2.5), band: BAND, dir: "up", action: "Increase weight", note: "You had 3+ reps in reserve — add load, reps drop back toward 8.", lastRir: last.rir };
-  else if (last.rir === "amber") out = { w: last.w, band: BAND, dir: "hold", action: "Hold, add a rep", note: "Right in the 8–12 zone — same weight, earn one more rep.", lastRir: last.rir };
-  else {
-    if (lastReadiness === "tired") out = { w: last.w, band: BAND, dir: "hold", action: "Hold", note: "Hit failure, but you trained tired — repeat before adding load.", lastRir: last.rir };
-    else if (lastReadiness === "energized" && last.reps < 8) out = { w: round5(Math.max(last.w - 2.5, 0)), band: BAND, dir: "down", action: "Ease off", note: "Fresh but under 8 reps — small drop to rebuild in range.", lastRir: last.rir };
-    else out = { w: last.w, band: BAND, dir: "hold", action: "Hold", note: "True max effort — consolidate before progressing.", lastRir: last.rir };
-  }
-  if (todayReadiness === "tired" && out.dir === "up") out = { ...out, w: last.w, dir: "hold", action: "Hold", note: "Tired today — match last week, push when you're fresh." };
-  return out;
-}
+/* ===== progression logic lives in ./lib/progression.js (progressionOf(program)) ===== */
 
 /* ===== exercises + default programs (no seeded history) ===== */
 const EXERCISE_DB = EXERCISES_DATA;
@@ -102,6 +85,7 @@ const exName = (id) => EXERCISE_MAP.get(id)?.name || id;
 const exMuscle = (id) => EXERCISE_MAP.get(id)?.bodyPart || "";
 const isBW = (id) => EXERCISE_MAP.get(id)?.equipment === "body weight";
 const exFull = (id) => EXERCISE_MAP.get(id);
+const setCount = (exx) => (typeof exx.sets === "number" ? exx.sets : exx.sets.length);
 const dayIdCache = new WeakMap();
 let dayIdSeq = 0;
 const dayKey = (d) => { if (!dayIdCache.has(d)) dayIdCache.set(d, `day-${dayIdSeq++}`); return dayIdCache.get(d); };
@@ -114,19 +98,19 @@ const ex = (id, sets) => ({ ...N(sets), id });
    0085 Barbell Romanian Deadlift · 0336 Dumbbell Lunge · 0549 Kettlebell Swing · 0405 Dumbbell Seated Shoulder Press
    0334 Dumbbell Lateral Raise · 0294 Dumbbell Biceps Curl · 0060 Barbell Lying Triceps Extension Skull Crusher · plank Plank (custom) */
 const DEFAULT_PROGRAMS = [
-  { id: "p1", name: "Strength", style: "strength", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
+  { id: "p1", name: "Strength", style: "strength", progressionType: "rir", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
     { name: "Push", ex: [ex("0025", 4), ex("0405", 3), ex("0314", 3), ex("0060", 3)] },
     { name: "Pull", ex: [ex("0027", 4), ex("0652", 3), ex("0294", 3)] },
     { name: "Legs", ex: [ex("1436", 4), ex("0085", 3), ex("0336", 3)] },
     { name: "Full Body", ex: [ex("0549", 3), ex("0334", 3), ex("plank", 3)] },
   ] },
-  { id: "p2", name: "Hypertrophy", style: "hypertrophy", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
+  { id: "p2", name: "Hypertrophy", style: "hypertrophy", progressionType: "rir", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
     { name: "Chest & Triceps", ex: [ex("0314", 4), ex("0025", 3), ex("0060", 3), ex("0662", 2)] },
     { name: "Back & Biceps", ex: [ex("0292", 4), ex("0652", 3), ex("band_pull", 3), ex("0294", 3)] },
     { name: "Legs", ex: [ex("1436", 4), ex("0085", 4), ex("0336", 3)] },
     { name: "Shoulders & Arms", ex: [ex("0405", 4), ex("0334", 4), ex("0294", 3), ex("0060", 3)] },
   ] },
-  { id: "p3", name: "Conditioning", style: "conditioning", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
+  { id: "p3", name: "Conditioning", style: "conditioning", progressionType: "rir", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [
     { name: "Circuit A", ex: [ex("0549", 4), ex("0336", 3), ex("0662", 3), ex("plank", 3)] },
     { name: "Circuit B", ex: [ex("1436", 3), ex("0292", 3), ex("0405", 3), ex("0549", 3)] },
     { name: "Circuit C", ex: [ex("0652", 3), ex("0662", 3), ex("0336", 3), ex("plank", 3)] },
@@ -542,7 +526,7 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
                   <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: k === 0 ? "none" : `1px solid ${C.lineSoft}` }}>
                     <div style={{ width: 7, height: 7, borderRadius: 4, background: C.faint, flexShrink: 0 }} />
                     <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink, flex: 1 }}>{exName(e.id)}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.faint }}>{e.sets} × sets</span>
+                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.faint }}>{setCount(e)} × sets</span>
                   </div>
                 ))}
                 {w.ex.length > 4 && <div style={{ fontFamily: SANS, fontSize: 12, color: C.faint, marginTop: 8 }}>+{w.ex.length - 4} more</div>}
@@ -637,7 +621,8 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
   const startWorkout = (idx) => {
     const d = active.days[idx];
     const init = {};
-    d.ex.forEach((exx, ei) => { const rec = recommend(exx.last, active.lastReadiness, null); Array.from({ length: exx.sets }).forEach((_, si) => { init[`${ei}-${si}`] = { w: exx.last?.logged && exx.last.w > 0 ? wStr(rec.w, u) : "", reps: exx.last?.logged ? String(exx.last.reps || 10) : "" }; }); });
+    const strategy = progressionOf(active);
+    d.ex.forEach((exx, ei) => { const rec = strategy.recommend(exx, { lastReadiness: active.lastReadiness }); Array.from({ length: setCount(exx) }).forEach((_, si) => { init[`${ei}-${si}`] = { w: exx.last?.logged && exx.last.w > 0 ? wStr(rec.w, u) : "", reps: exx.last?.logged ? String(exx.last.reps || 10) : "" }; }); });
     setDraft({ programId: active.id, dayIdx: idx, dateKey: ymd(new Date()), setData: init, done: {}, startedAt: new Date().toISOString() });
     setOpenRating(null); setConfirmDiscard(false); setPhase("active");
   };
@@ -648,16 +633,16 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
   const finish = (readiness) => {
     const idx = live.dayIdx, sdAll = live.setData, dn = live.done;
     const sets = [];
+    const strategy = progressionOf(active);
     const newDays = active.days.map((d, di) => {
       if (di !== idx) return d;
       return { ...d, ex: d.ex.map((exx, ei) => {
         const rated = Object.keys(dn).filter((k) => k.startsWith(`${ei}-`));
         if (!rated.length) return exx;
-        const lastKey = rated[rated.length - 1]; const lastRating = dn[lastKey];
-        const bw = isBW(exx.id);
-        rated.forEach((k) => { const sd = sdAll[k] || {}; const w = parseFloat(sd.w) || 0; const reps = parseInt(sd.reps) || 0; sets.push({ exId: exx.id, w, reps, rir: dn[k] }); });
-        const sdLast = sdAll[lastKey] || {}; const wLast = parseFloat(sdLast.w) || (bw ? 0 : (exx.last?.w || 0)); const repsLast = parseInt(sdLast.reps) || exx.last?.reps || 10;
-        return { ...exx, last: { w: wLast, reps: repsLast, rir: lastRating, logged: true } };
+        const loggedSets = rated.map((k) => { const sd = sdAll[k] || {}; return { w: parseFloat(sd.w) || 0, reps: parseInt(sd.reps) || 0, rating: dn[k] }; });
+        loggedSets.forEach((s) => sets.push({ exId: exx.id, w: s.w, reps: s.reps, rir: s.rating }));
+        const patch = strategy.finishExercise(exx, loggedSets, { isBodyweight: isBW(exx.id) });
+        return patch ? { ...exx, ...patch } : exx;
       }) };
     });
     setSavedCount(Object.keys(dn).length); setFinishedIdx(idx);
@@ -752,7 +737,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
             <button key={i} onClick={() => startWorkout(i)} style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "left", padding: "16px 18px", borderRadius: 14, border: `1.5px solid ${sug ? ACC : C.line}`, background: sug ? ACC_BG : C.card, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
               <div style={{ width: 44, height: 44, borderRadius: 12, background: sug ? ACC : C.page, color: sug ? "#fff" : C.sub, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Dumbbell size={20} /></div>
               <div style={{ flex: 1 }}><div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontFamily: SANS, fontSize: 16.5, fontWeight: 650, color: C.ink }}>{wLabel(i)}</span>{sug && <span style={{ fontFamily: MONO, fontSize: 8.5, background: ACC, color: "#fff", padding: "2px 6px", borderRadius: 5, letterSpacing: .5 }}>TODAY</span>}</div>
-                <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.faint, marginTop: 3 }}>{d.ex.length} exercise{d.ex.length !== 1 ? "s" : ""} · {d.ex.reduce((n, e) => n + e.sets, 0)} sets</div></div>
+                <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.faint, marginTop: 3 }}>{d.ex.length} exercise{d.ex.length !== 1 ? "s" : ""} · {d.ex.reduce((n, e) => n + setCount(e), 0)} sets</div></div>
               <Play size={18} color={sug ? ACC : C.faint} />
             </button>
           ); })}
@@ -779,7 +764,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
   const day = active.days[live.dayIdx];
   const setData = live.setData || {}, done = live.done || {};
   const subLine = `${active.name} · Week ${programWeek(active)} · ${wLabel(live.dayIdx)}`;
-  const totalSets = day.ex.reduce((n, e) => n + e.sets, 0);
+  const totalSets = day.ex.reduce((n, e) => n + setCount(e), 0);
   const doneCount = Object.keys(done).length;
 
   /* ================= REVIEW ================= */
@@ -811,7 +796,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
         <span style={{ fontFamily: SANS, fontSize: 11.5, color: C.amber, background: C.amberBg, padding: "3px 9px", borderRadius: 6 }}>Saved as you go</span>
       </div>
       {day.ex.map((exx, ei) => {
-        const rec = recommend(exx.last, active.lastReadiness, null);
+        const rec = progressionOf(active).recommend(exx, { lastReadiness: active.lastReadiness });
         const Arrow = rec.dir === "up" ? ArrowUp : rec.dir === "down" ? ArrowDown : ArrowRight;
         const dirColor = rec.dir === "up" ? C.green : rec.dir === "down" ? C.red : C.sub;
         const bw = isBW(exx.id);
@@ -835,7 +820,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
               <div style={th}>REPS</div>
               <div style={{ width: 48 }} />
             </div>
-            {Array.from({ length: exx.sets }).map((_, si) => {
+            {Array.from({ length: setCount(exx) }).map((_, si) => {
               const key = `${ei}-${si}`, rated = done[key]; const sd = setData[key] || { w: "", reps: "" };
               const cell = { flex: 1, height: 44, background: C.page, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center" };
               const inp = { border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 16, fontWeight: 600, color: C.ink, textAlign: "center", width: "100%", minWidth: 0 };
@@ -871,7 +856,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go }) {
   );
 }
 
-function Programs({ programs, setPrograms, history }) {
+function Programs({ programs, setPrograms, history, go }) {
   const [openId, setOpenId] = useState(null);
   const [info, setInfo] = useState(null);
   const startProgram = (id, scheduleDays) => setPrograms(programs.map((p) => p.id === id ? { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0, scheduleDays } : { ...p, active: false }));
@@ -879,7 +864,7 @@ function Programs({ programs, setPrograms, history }) {
   const resumeProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, pausedMs: (p.pausedMs || 0) + (Date.now() - new Date(p.pausedAt).getTime()), pausedAt: null } : p));
   const stopProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, active: false, pausedAt: null } : p));
   const restartProgram = (id) => setPrograms(programs.map((p) => p.id === id ? { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0 } : { ...p, active: false }));
-  const createProgram = () => { const id = "p" + Date.now(); setPrograms([...programs, { id, name: "New Program", style: "custom", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [] }]); setOpenId(id); };
+  const createProgram = () => { const id = "p" + Date.now(); setPrograms([...programs, { id, name: "New Program", style: "custom", progressionType: "rir", weeks: 12, active: false, startedAt: null, pausedAt: null, pausedMs: 0, scheduleDays: [], lastReadiness: "normal", days: [] }]); setOpenId(id); };
 
   if (openId) {
     const p = programs.find((x) => x.id === openId);
@@ -1020,7 +1005,7 @@ function ProgramDetail({ program, onBack, onChange, onDelete, onStart, onPause, 
                                 <DragHandle attributes={attributes} listeners={listeners} />
                                 <ExerciseThumb exercise={full} onOpen={setDetail} size={36} />
                                 <div onClick={() => setDetail(full)} style={{ flex: 1, minWidth: 100, cursor: "pointer" }}><div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 550, color: C.ink }}>{full.name}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 2 }}>{full.bodyPart.toUpperCase()}</div></div>
-                                <div style={{ display: "flex", alignItems: "center", gap: 5 }}><button onClick={() => setSets(di, e.id, e.sets - 1)} style={{ ...miniRound, width: 27, height: 27 }}><Minus size={13} strokeWidth={2.5} /></button><span style={{ fontFamily: MONO, fontSize: 12, color: C.ink, minWidth: 42, textAlign: "center" }}>{e.sets} set{e.sets !== 1 ? "s" : ""}</span><button onClick={() => setSets(di, e.id, e.sets + 1)} style={{ ...miniRound, width: 27, height: 27 }}><Plus size={13} strokeWidth={2.5} /></button></div>
+                                <div style={{ display: "flex", alignItems: "center", gap: 5 }}><button onClick={() => setSets(di, e.id, setCount(e) - 1)} style={{ ...miniRound, width: 27, height: 27 }}><Minus size={13} strokeWidth={2.5} /></button><span style={{ fontFamily: MONO, fontSize: 12, color: C.ink, minWidth: 42, textAlign: "center" }}>{setCount(e)} set{setCount(e) !== 1 ? "s" : ""}</span><button onClick={() => setSets(di, e.id, setCount(e) + 1)} style={{ ...miniRound, width: 27, height: 27 }}><Plus size={13} strokeWidth={2.5} /></button></div>
                                 <button onClick={() => removeEx(di, e.id)} style={{ ...miniRound, width: 30, height: 30 }}><X size={15} color={C.sub} /></button>
                               </div>
                             )}
@@ -1226,7 +1211,7 @@ export default function App() {
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
           {tab === "home" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} go={setTab} />}
           {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} go={setTab} />}
-          {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} />}
+          {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} go={setTab} />}
           {tab === "profile" && <Profile profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} />}
         </div>
         <div style={{ flexShrink: 0, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "8px 8px max(22px, env(safe-area-inset-bottom))" }}>
