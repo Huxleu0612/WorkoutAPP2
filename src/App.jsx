@@ -992,7 +992,9 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
     if (t.tags.some((tag) => tag.toLowerCase().includes(lq))) return true;
     return t.days.some((d) => d.ex.some((e) => exName(e.id).toLowerCase().includes(lq)));
   };
-  const filtered = PROGRAM_CATALOG.filter((t) => matchesQuery(t) && (tagFilter === "All" || t.tags.includes(tagFilter)));
+  const filtered = PROGRAM_CATALOG
+    .filter((t) => matchesQuery(t) && (tagFilter === "All" || t.tags.includes(tagFilter)))
+    .sort((a, b) => (PERIODIZATION_INFO[a.progressionType] ? 0 : 1) - (PERIODIZATION_INFO[b.progressionType] ? 0 : 1));
   const shownCatalog = filtered.slice(0, PROGRAM_LIBRARY_LIMIT);
 
   const activeProg = programs.find((p) => p.active) || null;
