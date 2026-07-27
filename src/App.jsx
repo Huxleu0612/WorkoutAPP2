@@ -231,7 +231,7 @@ function ConfirmPanel({ title, body, slideLabel, color = C.red, onConfirm, onCan
 function Sortable({ id, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   return (
-    <div ref={setNodeRef} style={{ transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}>
+    <div ref={setNodeRef} style={{ position: "relative", zIndex: isDragging ? 10 : "auto", transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}>
       {children({ attributes, listeners, isDragging })}
     </div>
   );
@@ -337,6 +337,10 @@ function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, childr
           position: "relative",
           zIndex: 1,
           touchAction: "pan-y",
+          userSelect: "none",
+          WebkitUserSelect: "none",
+          WebkitTouchCallout: "none",
+          WebkitTapHighlightColor: "transparent",
           transform: `translateX(${dragX}px)${lifted ? " scale(1.015)" : ""}`,
           boxShadow: lifted ? "0 6px 16px rgba(20,20,30,0.14)" : "none",
           transition: gesture.current.active ? "none" : "transform 380ms cubic-bezier(.16,1,.3,1), box-shadow 380ms ease",
