@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import EXERCISES_DATA from "./data/exercises.json";
 import { PROGRAM_CATALOG } from "./data/programCatalog";
-import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, useDraggable, useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
@@ -122,8 +122,9 @@ function assignedIdx(program, date) {
   if (!program || !program.days.length || !(program.scheduleDays || []).length) return null;
   const dow = date.getDay();
   if (!program.scheduleDays.includes(dow)) return null;
-  const sorted = [...program.scheduleDays].sort((a, b) => monFirst(a) - monFirst(b));
-  return sorted.indexOf(dow) % program.days.length;
+  // scheduleDays' stored order (not a re-derived Monday-first sort) is what decides which
+  // workout lands on which weekday, so dragging to reassign a day on the Train screen sticks.
+  return program.scheduleDays.indexOf(dow) % program.days.length;
 }
 const weekKeysOf = (d) => { const m = mondayOf(d); return Array.from({ length: 7 }).map((_, i) => ymd(addDays(m, i))); };
 const matchesWorkout = (h, ai) => (h.dayIdx != null ? h.dayIdx === ai : h.dayName === wLabel(ai));
@@ -229,6 +230,13 @@ function ConfirmPanel({ title, body, slideLabel, color = C.red, onConfirm, onCan
   );
 }
 
+// 500ms is the standard long-press duration on both iOS and Android. Tolerance is
+// uncapped: no amount of movement during the hold cancels the pending activation —
+// only releasing before 500ms is up does. A real swipe (released well under 500ms)
+// still won't activate a drag; a swipe that's held open past 500ms now will.
+function useReorderSensors() {
+  return useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 500, tolerance: Infinity } }));
+}
 function Sortable({ id, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   // The moment a long press actually activates dnd-kit's drag, lift the item (scale +
@@ -354,6 +362,39 @@ function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, childr
       >
         {children}
       </div>
+    </div>
+  );
+}
+/* A weekday row that's both a drag source and a drop target for the SAME id: dragging one
+   scheduled day onto another swaps which workout each weekday runs (fixed calendar slots,
+   not a reorderable list, so this uses dnd-kit's plain draggable/droppable rather than
+   useSortable — there's no "before/after" here, just "trade contents with this other day"). */
+function ScheduleSwapRow({ dow, draggable, children }) {
+  const id = `sched-${dow}`;
+  const { attributes, listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({ id, disabled: !draggable });
+  const { setNodeRef: setDropRef, isOver } = useDroppable({ id, disabled: !draggable });
+  return (
+    <div
+      ref={(node) => { setDragRef(node); setDropRef(node); }}
+      {...(draggable ? attributes : {})}
+      {...(draggable ? listeners : {})}
+      style={{
+        position: "relative",
+        zIndex: isDragging ? 10 : "auto",
+        transform: transform ? `${DndCSS.Translate.toString(transform)} scale(1.03)` : undefined,
+        opacity: isDragging ? 0.95 : 1,
+        boxShadow: isDragging ? "0 12px 28px rgba(20,20,30,0.22)" : "none",
+        borderRadius: 13,
+        outline: isOver && !isDragging ? `2px solid ${ACC}` : "2px solid transparent",
+        outlineOffset: 2,
+        transition: isDragging ? "none" : "transform 200ms ease, box-shadow 200ms ease, outline-color 150ms ease",
+        touchAction: draggable ? "pan-y" : undefined,
+        userSelect: draggable ? "none" : undefined,
+        WebkitUserSelect: draggable ? "none" : undefined,
+        WebkitTouchCallout: draggable ? "none" : undefined,
+      }}
+    >
+      {children}
     </div>
   );
 }
@@ -703,7 +744,7 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
     </div>
   );
 }
-function Train({ profile, programs, history, draft, setDraft, onFinish, go, equipment, setEquipment }) {
+function Train({ profile, programs, history, draft, setDraft, onFinish, onReorderSchedule, go, equipment, setEquipment }) {
   const active = activeProgram(programs);
   const u = profile.unit;
   const live = draft && active && draft.programId === active.id ? draft : null;
@@ -714,6 +755,15 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go, equi
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [detail, setDetail] = useState(null);
   const [calcOpen, setCalcOpen] = useState(null);
+  const scheduleSensors = useReorderSensors();
+  const swapScheduleDays = (dowA, dowB) => {
+    if (!active || dowA === dowB) return;
+    const sd = [...active.scheduleDays];
+    const posA = sd.indexOf(dowA), posB = sd.indexOf(dowB);
+    if (posA === -1 || posB === -1) return;
+    [sd[posA], sd[posB]] = [sd[posB], sd[posA]];
+    onReorderSchedule(active.id, sd);
+  };
   useEffect(() => { if (!live && (phase === "active" || phase === "review")) setPhase("schedule"); }, [live, phase]);
 
   if (!active) return (<div style={{ padding: "6px 18px 24px" }}><PageTitle sub="Workout">This week</PageTitle><Card style={{ padding: 30, textAlign: "center" }}><div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink }}>No active program</div><div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, margin: "6px 0 18px", lineHeight: 1.5 }}>Start a program on the Programs tab, then your week appears here.</div><BigButton tone="acc" onClick={() => go("programs")}>Go to Programs</BigButton></Card></div>);
@@ -801,39 +851,44 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go, equi
           <SectionLabel>This week's schedule</SectionLabel>
           <button onClick={() => setCalcOpen({ initialKg: 0 })} style={{ ...miniRound, marginBottom: 8 }}><Calculator size={16} /></button>
         </div>
-        <div style={{ display: "grid", gap: 10 }}>
-          {week.map((d, i) => {
-            const isWorkout = d.aidx != null;
-            const missed = isWorkout && d.past && !d.done && !d.inProgress;
-            const border = d.done ? C.green : d.inProgress ? C.amber : d.isToday && isWorkout ? ACC : C.line;
-            const iconBg = d.done ? C.greenBg : d.inProgress ? C.amberBg : d.isToday && isWorkout ? ACC_BG : C.page;
-            const iconColor = d.done ? C.green : d.inProgress ? C.amber : d.isToday && isWorkout ? ACC : C.faint;
-            return (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 40, fontFamily: MONO, fontSize: 11, fontWeight: 700, color: d.isToday ? ACC : C.faint, flexShrink: 0 }}>{WD_LONG[d.dow].slice(0, 3).toUpperCase()}</div>
-                <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 12, background: C.card, border: `1.5px solid ${border}`, borderRadius: 13, padding: "12px 14px", minHeight: 66 }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 11, background: iconBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{isWorkout ? <Dumbbell size={20} color={iconColor} /> : <Moon size={19} color={C.faint} />}</div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    {isWorkout ? (
-                      <>{d.done && <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}><Check size={13} color={C.green} strokeWidth={3} /><span style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: C.green }}>Complete</span></div>}
-                        {d.inProgress && <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 600, color: C.amber, marginBottom: 2 }}>In progress</div>}
-                        {missed && <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 600, color: C.amber, marginBottom: 2 }}>Missed</div>}
-                        <div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink }}>{wLabel(d.aidx)}</div></>
-                    ) : (
-                      <div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 600, color: C.faint }}>Rest</div>
-                    )}
-                  </div>
-                  {isWorkout && !d.done && (
-                    <button onClick={() => (d.inProgress ? setPhase("active") : startWorkout(d.aidx))} style={{ height: 40, padding: "0 16px", borderRadius: 20, border: "none", background: d.inProgress ? C.amber : missed ? C.amber : ACC, color: "#fff", fontFamily: SANS, fontSize: 14, fontWeight: 650, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Play size={14} /> {d.inProgress ? "Resume" : "Start"}</button>
-                  )}
-                  {!isWorkout && (
-                    <button onClick={() => setPhase("pick")} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, color: ACC, fontFamily: SANS, fontSize: 13.5, fontWeight: 600, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Plus size={16} strokeWidth={2.5} /> Add</button>
-                  )}
+        <DndContext sensors={scheduleSensors} onDragEnd={({ active, over }) => { if (over) swapScheduleDays(Number(active.id.slice(6)), Number(over.id.slice(6))); }} modifiers={[restrictToVerticalAxis]}>
+          <div style={{ display: "grid", gap: 10 }}>
+            {week.map((d, i) => {
+              const isWorkout = d.aidx != null;
+              const missed = isWorkout && d.past && !d.done && !d.inProgress;
+              const border = d.done ? C.green : d.inProgress ? C.amber : d.isToday && isWorkout ? ACC : C.line;
+              const iconBg = d.done ? C.greenBg : d.inProgress ? C.amberBg : d.isToday && isWorkout ? ACC_BG : C.page;
+              const iconColor = d.done ? C.green : d.inProgress ? C.amber : d.isToday && isWorkout ? ACC : C.faint;
+              return (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 40, fontFamily: MONO, fontSize: 11, fontWeight: 700, color: d.isToday ? ACC : C.faint, flexShrink: 0 }}>{WD_LONG[d.dow].slice(0, 3).toUpperCase()}</div>
+                  <ScheduleSwapRow dow={d.dow} draggable={isWorkout}>
+                    <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 12, background: C.card, border: `1.5px solid ${border}`, borderRadius: 13, padding: "12px 14px", minHeight: 66 }}>
+                      <div style={{ width: 44, height: 44, borderRadius: 11, background: iconBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{isWorkout ? <Dumbbell size={20} color={iconColor} /> : <Moon size={19} color={C.faint} />}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {isWorkout ? (
+                          <>{d.done && <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}><Check size={13} color={C.green} strokeWidth={3} /><span style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: C.green }}>Complete</span></div>}
+                            {d.inProgress && <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 600, color: C.amber, marginBottom: 2 }}>In progress</div>}
+                            {missed && <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 600, color: C.amber, marginBottom: 2 }}>Missed</div>}
+                            <div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink }}>{wLabel(d.aidx)}</div></>
+                        ) : (
+                          <div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 600, color: C.faint }}>Rest</div>
+                        )}
+                      </div>
+                      {isWorkout && !d.done && (
+                        <button onClick={() => (d.inProgress ? setPhase("active") : startWorkout(d.aidx))} onPointerDown={(e) => e.stopPropagation()} style={{ height: 40, padding: "0 16px", borderRadius: 20, border: "none", background: d.inProgress ? C.amber : missed ? C.amber : ACC, color: "#fff", fontFamily: SANS, fontSize: 14, fontWeight: 650, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Play size={14} /> {d.inProgress ? "Resume" : "Start"}</button>
+                      )}
+                      {!isWorkout && (
+                        <button onClick={() => setPhase("pick")} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, color: ACC, fontFamily: SANS, fontSize: 13.5, fontWeight: 600, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Plus size={16} strokeWidth={2.5} /> Add</button>
+                      )}
+                    </div>
+                  </ScheduleSwapRow>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </DndContext>
+        {active.scheduleDays.length > 1 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.faint, padding: "8px 4px 0", lineHeight: 1.5 }}>Press and hold a workout, then drag it onto another day to swap which workout runs when.</div>}
         {calcOpen && <PlateCalculator targetKg={calcOpen.initialKg} equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setCalcOpen(null)} />}
       </div>
     );
@@ -1202,11 +1257,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
   const [pickDays, setPickDays] = useState(program.scheduleDays?.length ? program.scheduleDays : (DEFAULT_DAYS[Math.min(7, Math.max(1, program.days.length || 3))] || [1, 3, 5]));
   const [detail, setDetail] = useState(null);
   const [activeDayIdx, setActiveDayIdx] = useState(null); // which day's exercise list is mid-reorder, for the spotlight/fence treatment
-  // 500ms is the standard long-press duration on both iOS and Android. Tolerance is
-  // uncapped: no amount of movement during the hold cancels the pending activation —
-  // only releasing before 500ms is up does. A real swipe (released well under 500ms)
-  // still won't activate a drag; a swipe that's held open past 500ms now will.
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 500, tolerance: Infinity } }));
+  const sensors = useReorderSensors();
   const days = program.days;
   const paused = isPaused(program);
   const weeks = program.weeks || 12;
@@ -1280,7 +1331,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
       <div style={{ display: "flex", gap: 6, justifyContent: "space-between", marginBottom: 16 }}>
         {[1, 2, 3, 4, 5, 6, 0].map((wd) => { const on = pickDays.includes(wd); return (<button key={wd} onClick={() => toggleDay(wd)} style={{ flex: 1, height: 46, borderRadius: 11, border: `1.5px solid ${on ? ACC : C.line}`, background: on ? ACC : C.card, color: on ? "#fff" : C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 650, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{WD_LETTER[wd]}</button>); })}
       </div>
-      <BigButton tone="acc" disabled={pickDays.length === 0} onClick={() => confirmStart([...pickDays].sort())}>Start on {pickDays.length} day{pickDays.length !== 1 ? "s" : ""}/week</BigButton>
+      <BigButton tone="acc" disabled={pickDays.length === 0} onClick={() => confirmStart([...pickDays].sort((a, b) => monFirst(a) - monFirst(b)))}>Start on {pickDays.length} day{pickDays.length !== 1 ? "s" : ""}/week</BigButton>
       <button onClick={() => setStarting(false)} style={{ width: "100%", height: 44, marginTop: 8, borderRadius: 11, border: "none", background: "transparent", color: C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
     </Card>
   ) : (
@@ -1686,6 +1737,7 @@ export default function App() {
   if (!profile.onboarded) return <Onboarding onDone={(p) => setProfile(p)} />;
 
   const finishSession = (session, updatedDays, readiness) => { setPrograms((ps) => ps.map((p) => p.id === session.programId ? { ...p, days: updatedDays, lastReadiness: readiness } : p)); setHistory((h) => [...h, session]); };
+  const reorderSchedule = (id, scheduleDays) => setPrograms((ps) => ps.map((p) => p.id === id ? { ...p, scheduleDays } : p));
   const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setProfile({ onboarded: false }); setTab("home"); };
 
   const tabs = [{ id: "home", icon: Home, label: "Dashboard" }, { id: "train", icon: Dumbbell, label: "Train" }, { id: "programs", icon: Layers, label: "Programs" }, { id: "profile", icon: User, label: "Profile" }];
@@ -1694,7 +1746,7 @@ export default function App() {
       <div style={{ width: "100%", maxWidth: 430, background: C.page, display: "flex", flexDirection: "column", height: "100%" }}>
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
           {tab === "home" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} go={setTab} />}
-          {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
+          {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} onReorderSchedule={reorderSchedule} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
           {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} go={setTab} />}
           {tab === "profile" && <Profile profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} />}
         </div>
