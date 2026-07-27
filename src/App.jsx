@@ -297,6 +297,12 @@ function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, childr
     e.stopPropagation();
     finish(g.locked === "x" && dragX > THRESHOLD);
   };
+  const onPointerCancel = (e) => {
+    const g = gesture.current;
+    if (!g.active) return;
+    e.stopPropagation();
+    finish(false); // a cancel is the browser/OS interrupting the touch, never a deliberate commit
+  };
 
   return (
     <div style={{ position: "relative", overflow: "hidden", borderRadius: radius }}>
@@ -309,7 +315,7 @@ function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, childr
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
+        onPointerCancel={onPointerCancel}
         style={{
           position: "relative",
           zIndex: 1,
