@@ -230,8 +230,13 @@ function ConfirmPanel({ title, body, slideLabel, color = C.red, onConfirm, onCan
 
 function Sortable({ id, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  // The moment a long press actually activates dnd-kit's drag, lift the item (scale +
+  // shadow) so there's an unmistakable cue that it's safe to move now — without this,
+  // people naturally start moving before the hold has truly registered, which cancels
+  // the pending activation and makes the row feel like it won't budge.
+  const t = [DndCSS.Transform.toString(transform), isDragging ? "scale(1.03)" : ""].filter(Boolean).join(" ");
   return (
-    <div ref={setNodeRef} style={{ position: "relative", zIndex: isDragging ? 10 : "auto", transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}>
+    <div ref={setNodeRef} style={{ position: "relative", zIndex: isDragging ? 10 : "auto", transform: t, transition, opacity: isDragging ? 0.97 : 1, boxShadow: isDragging ? "0 12px 28px rgba(20,20,30,0.22)" : "none" }}>
       {children({ attributes, listeners, isDragging })}
     </div>
   );
@@ -1195,10 +1200,11 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
   const [progInfo, setProgInfo] = useState(false);
   const [pickDays, setPickDays] = useState(program.scheduleDays?.length ? program.scheduleDays : (DEFAULT_DAYS[Math.min(7, Math.max(1, program.days.length || 3))] || [1, 3, 5]));
   const [detail, setDetail] = useState(null);
-  // 500ms is the standard long-press duration on both iOS and Android; 15px tolerance
-  // is generous enough to absorb natural hand tremor over that window without letting
-  // a real swipe (which covers far more distance, far faster) get mistaken for a hold.
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 500, tolerance: 15 } }));
+  // 500ms is the standard long-press duration on both iOS and Android; 20px tolerance
+  // gives extra slack for someone starting to move a beat before the hold fully
+  // registers (there's no way to feel 500ms elapse, so people naturally jump the gun) —
+  // a real swipe still covers far more distance far faster and won't survive the window.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 500, tolerance: 20 } }));
   const days = program.days;
   const paused = isPaused(program);
   const weeks = program.weeks || 12;
