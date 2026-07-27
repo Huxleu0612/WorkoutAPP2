@@ -603,6 +603,8 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
   const greetHr = new Date().getHours();
   const greet = greetHr < 12 ? "Good morning" : greetHr < 18 ? "Good afternoon" : "Good evening";
 
+  if (view === "stats" && active) return <StatsView sessions={sessionsFor(history, active.id)} unit={u} title={active.name} sub="Program stats" onBack={() => setView("main")} />;
+
   return (
     <div style={{ padding: "14px 18px 24px" }}>
       {/* GREETING */}
