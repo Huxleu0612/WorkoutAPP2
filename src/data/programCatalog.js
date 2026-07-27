@@ -17,6 +17,7 @@ const SQUAT = "1436"; // Barbell High Bar Squat
 const FRONT_SQUAT = "0042"; // Barbell Front Squat
 const BENCH = "0025"; // Barbell Bench Press
 const INCLINE_BB_BENCH = "0047"; // Barbell Incline Bench Press
+const CLOSE_GRIP_BENCH = "0030"; // Barbell Close-Grip Bench Press
 const DEADLIFT = "0032"; // Barbell Deadlift
 const RDL = "0085"; // Barbell Romanian Deadlift
 const SUMO_DEADLIFT = "0117"; // Barbell Sumo Deadlift
@@ -188,10 +189,10 @@ export const PROGRAM_CATALOG = [
     templateId: "cat_nsuns", name: "nSuns 5/3/1 LP", style: "strength", progressionType: "nsuns",
     tags: ["531", "high frequency", "training max"], difficulty: "advanced", daysPerWeek: 4, weeks: 16,
     days: [
-      { name: "Bench + OHP", ex: [ex(BENCH, 9, { liftKey: "bench", tier: "T1" }), ex(OHP, 5, { liftKey: "ohp", tier: "T2" })] },
-      { name: "Squat + Sumo Deadlift", ex: [ex(SQUAT, 9, { liftKey: "squat", tier: "T1" }), ex(SUMO_DEADLIFT, 5, { liftKey: "deadlift", tier: "T2" })] },
-      { name: "OHP + Incline Bench", ex: [ex(OHP, 9, { liftKey: "ohp", tier: "T1" }), ex(INCLINE_BB_BENCH, 5, { liftKey: "bench", tier: "T2" })] },
-      { name: "Deadlift + Front Squat", ex: [ex(DEADLIFT, 9, { liftKey: "deadlift", tier: "T1" }), ex(FRONT_SQUAT, 5, { liftKey: "squat", tier: "T2" })] },
+      { name: "Bench + OHP", ex: [ex(BENCH, 9, { liftKey: "bench", tier: "T1", t1Variant: "benchLight" }), ex(OHP, 8, { liftKey: "ohp", tier: "T2", t2Base: 50 })] },
+      { name: "Squat + Sumo Deadlift", ex: [ex(SQUAT, 9, { liftKey: "squat", tier: "T1", t1Variant: "squat" }), ex(SUMO_DEADLIFT, 8, { liftKey: "deadlift", tier: "T2", t2Base: 50 })] },
+      { name: "Bench + Close-Grip Bench", ex: [ex(BENCH, 9, { liftKey: "bench", tier: "T1", t1Variant: "benchHeavy" }), ex(CLOSE_GRIP_BENCH, 8, { liftKey: "bench", tier: "T2", t2Base: 40 })] },
+      { name: "Deadlift + Front Squat", ex: [ex(DEADLIFT, 9, { liftKey: "deadlift", tier: "T1", t1Variant: "deadlift" }), ex(FRONT_SQUAT, 8, { liftKey: "squat", tier: "T2", t2Base: 35 })] },
     ],
   },
   {

@@ -100,32 +100,49 @@ const WAVE_531 = [
   [{ pct: 0.40, reps: 5, kind: "fixed" }, { pct: 0.50, reps: 5, kind: "fixed" }, { pct: 0.60, reps: 5, kind: "fixed" }],
 ];
 const WAVE_LABEL = ["5s week", "3s week", "1s week", "deload week"];
-const BBB_VOLUME = Array.from({ length: 5 }, () => ({ pct: 0.5, reps: 10, kind: "volume" }));
+// BBB volume sets are 50% of true 1RM, not 50% of training max — since TM is ~90% of 1RM, that's
+// 5/9 of TM once converted. Deload week keeps the volume work but drops to 3 sets instead of 5.
+const BBB_PCT = 5 / 9;
+const BBB_VOLUME = Array.from({ length: 5 }, () => ({ pct: BBB_PCT, reps: 10, kind: "volume" }));
+const BBB_VOLUME_DELOAD = Array.from({ length: 3 }, () => ({ pct: BBB_PCT, reps: 10, kind: "volume" }));
 
-// nSuns' classic 4-day LP: T1 is the main lift (9 sets), T2 a related lift at lower %s (5 sets) —
+// nSuns' classic 4-day LP: T1 is the main lift (9 sets), T2 a related lift at lower %s (8 sets) —
 // both tables are fixed every week; only the training max (and so the resulting weight) changes.
-const NSUNS_T1 = [
-  { pct: 0.65, reps: 8, kind: "fixed" }, { pct: 0.75, reps: 6, kind: "fixed" }, { pct: 0.85, reps: 4, kind: "fixed" },
-  { pct: 0.85, reps: 4, kind: "fixed" }, { pct: 0.85, reps: 4, kind: "amrap" },
-  { pct: 0.80, reps: 5, kind: "volume" }, { pct: 0.75, reps: 6, kind: "volume" }, { pct: 0.70, reps: 7, kind: "volume" }, { pct: 0.65, reps: 8, kind: "volume" },
-];
-const NSUNS_T2 = [
-  { pct: 0.50, reps: 8, kind: "fixed" }, { pct: 0.60, reps: 8, kind: "fixed" }, { pct: 0.70, reps: 8, kind: "fixed" },
-  { pct: 0.70, reps: 8, kind: "fixed" }, { pct: 0.70, reps: 8, kind: "volume" },
-];
+// T1 isn't one universal table — bench runs a lighter variant on its first day and a heavier one
+// (matching squat/deadlift's top-single structure) on its second, so each T1 slot names which table
+// it uses via exx.t1Variant.
+const f = (pct, reps) => ({ pct, reps, kind: "fixed" });
+const a = (pct, reps) => ({ pct, reps, kind: "amrap" });
+const NSUNS_T1_TABLES = {
+  benchLight: [f(.65, 8), f(.75, 6), f(.75, 6), f(.85, 4), f(.85, 4), f(.85, 4), f(.80, 5), f(.70, 7), a(.65, 8)],
+  squat: [f(.75, 5), f(.75, 5), f(.85, 3), f(.85, 3), a(.95, 1), f(.90, 3), f(.80, 3), f(.70, 5), a(.65, 5)],
+  benchHeavy: [f(.75, 5), f(.75, 5), f(.85, 3), a(.95, 1), f(.90, 3), f(.85, 5), f(.80, 3), f(.70, 3), a(.65, 5)],
+  deadlift: [f(.75, 5), f(.85, 3), f(.85, 3), a(.95, 1), f(.90, 3), f(.80, 3), f(.75, 3), f(.70, 3), a(.65, 3)],
+};
+// T2's rep pattern is constant (6,5,3,5,7,4,6,8); only the starting percentage shifts per exercise —
+// OHP/Sumo Deadlift start at 50%, Close-Grip Bench at 40%, Front Squat at 35%, each stepping up by
+// 10 points twice before holding flat for the remaining 6 sets.
+const nsunsT2Table = (base) => [6, 5, 3, 5, 7, 4, 6, 8].map((reps, i) => f((base + Math.min(i, 2) * 10) / 100, reps));
 
 const weekIndexFor = (ctx) => Math.floor((ctx.sessionCount || 0) / (ctx.program?.days?.length || 1));
 const seedTM = (exx, ctx) => ctx.program?.periodization?.[exx.liftKey]?.tm || 0;
 const increment = (exx) => LIFT_INCREMENT_KG[exx.liftKey] ?? 2.5;
 const weightForSpec = (tm, spec) => round5(tm * spec.pct);
+const applyMaxesAsTM = (maxInputs) => ({ periodization: Object.fromEntries(REQUIRED_LIFT_KEYS.map((lk) => [lk, { tm: parseFloat(maxInputs[lk]) || 0 }])) });
 
 const nsuns = {
   setRatingKind: "log",
   editable: { sets: false, exercises: false },
   needsMaxes: true,
   requiredLiftKeys: REQUIRED_LIFT_KEYS,
+  maxesInputLabel: "training max",
+  maxesHint: "Every set's weight is calculated from these. A training max is usually about 90% of your true 1-rep max — better to start conservative than to grind failed reps in week one.",
+  applyMaxes(program, maxInputs) {
+    return applyMaxesAsTM(maxInputs);
+  },
   getSetSpecs(exx) {
-    return exx.tier === "T2" ? NSUNS_T2 : NSUNS_T1;
+    if (exx.tier === "T2") return nsunsT2Table(exx.t2Base ?? 50);
+    return NSUNS_T1_TABLES[exx.t1Variant] || NSUNS_T1_TABLES.benchLight;
   },
   effectiveTM(exx, ctx) {
     return seedTM(exx, ctx) + weekIndexFor(ctx) * increment(exx);
@@ -153,10 +170,16 @@ const wave531 = {
   editable: { sets: false, exercises: false },
   needsMaxes: true,
   requiredLiftKeys: REQUIRED_LIFT_KEYS,
+  maxesInputLabel: "training max",
+  maxesHint: "Every set's weight is calculated from these. A training max is usually about 90% of your true 1-rep max — better to start conservative than to grind failed reps in week one.",
+  applyMaxes(program, maxInputs) {
+    return applyMaxesAsTM(maxInputs);
+  },
   getSetSpecs(exx, ctx) {
     const waveWeek = weekIndexFor(ctx) % 4;
     const main = WAVE_531[waveWeek];
-    return ctx.program?.bbbVolume && waveWeek !== 3 ? [...main, ...BBB_VOLUME] : main;
+    if (!ctx.program?.bbbVolume) return main;
+    return [...main, ...(waveWeek === 3 ? BBB_VOLUME_DELOAD : BBB_VOLUME)];
   },
   effectiveTM(exx, ctx) {
     const cycle = Math.floor(weekIndexFor(ctx) / 4);
@@ -185,9 +208,12 @@ const wave531 = {
    Unlike nsuns/531 above, GZCLP's "current week" isn't derivable from session count — whether a
    lift moves forward or resets a stage depends on whether the last AMRAP/rep target was actually
    hit, so each exercise entry carries its own small state machine in exx.periodization ({ stage,
-   weight }), advanced by finishExercise every time that exercise is logged. T1/T2/T3 are three
-   independent tiers — a lift used as T1 on one day and T2 on another progresses separately, since
-   each exercise entry (not each lift) owns its own stage/weight. */
+   weight, cycleStartWeight }), advanced by finishExercise every time that exercise is logged. T1/T2/T3
+   are three independent tiers — a lift used as T1 on one day and T2 on another progresses separately,
+   since each exercise entry (not each lift) owns its own stage/weight.
+   Onboarding asks for a tested 5-rep max (5RM) per lift, not a training max — T1 starts at 85% of it,
+   T2 at 70% of the SAME lift's 5RM (matching how the real program bases T2's load on its related T1
+   lift, e.g. "Bench Press (T2)" on squat day is 70% of your bench 5RM, not an independently-tracked max). */
 const T1_STAGES = [{ sets: 5, reps: 3 }, { sets: 6, reps: 2 }, { sets: 10, reps: 1 }];
 const T1_LABEL = ["5×3+", "6×2+", "10×1+"];
 const T2_STAGES = [{ reps: 10 }, { reps: 8 }, { reps: 6 }];
@@ -195,7 +221,10 @@ const T2_LABEL = ["3×10", "3×8", "3×6"];
 const T3_FLOOR_REPS = 15;
 const T3_BONUS_REPS = 25;
 const T3_INCREMENT_KG = 2.5;
-const STAGE_RESET_PCT = 0.9;
+const T1_START_PCT = 0.85;
+const T2_START_PCT = 0.70;
+const T1_STAGE_RESET_PCT = 0.9; // T1: an app can't force a real 5RM retest, so this approximates one
+const T2_CYCLE_RESTART_KG = 10; // T2: real protocol restarts ~10kg heavier than the last cycle's start
 
 const gzclpWeight = (exx) => exx.periodization?.weight || 0;
 const gzclpStage = (exx) => exx.periodization?.stage || 1;
@@ -203,7 +232,22 @@ const gzclpStage = (exx) => exx.periodization?.stage || 1;
 const gzclp = {
   setRatingKind: "log",
   editable: { sets: false, exercises: false },
-  needsMaxes: false,
+  needsMaxes: true,
+  maxesInputLabel: "5-rep max",
+  maxesHint: "T1 starts at 85% of this and T2 at 70% — enter your actual tested 5-rep max (5RM), not a 1-rep max. Be conservative; you'll be adding weight almost every session.",
+  applyMaxes(program, maxInputs) {
+    const days = program.days.map((d) => ({
+      ...d,
+      ex: d.ex.map((exx) => {
+        if (!exx.liftKey || exx.tier === "T3") return exx;
+        const fiveRM = parseFloat(maxInputs[exx.liftKey]) || 0;
+        const pct = exx.tier === "T1" ? T1_START_PCT : T2_START_PCT;
+        const weight = round5(fiveRM * pct);
+        return { ...exx, periodization: { stage: 1, weight, cycleStartWeight: weight } };
+      }),
+    }));
+    return { days };
+  },
   getSetSpecs(exx) {
     const stage = gzclpStage(exx);
     if (exx.tier === "T2") return Array.from({ length: 3 }, () => ({ reps: T2_STAGES[stage - 1].reps, kind: "fixed" }));
@@ -229,23 +273,27 @@ const gzclp = {
     if (!loggedSets.length) return null;
     const last = loggedSets[loggedSets.length - 1];
     if (!exx.periodization?.weight) {
-      return { last: { w: last.w, reps: last.reps, logged: true }, periodization: { stage: 1, weight: loggedSets[0].w || last.w } };
+      // defensive fallback — shouldn't normally trigger once a program's been through the 5RM wizard
+      const w = loggedSets[0].w || last.w;
+      return { last: { w: last.w, reps: last.reps, logged: true }, periodization: { stage: 1, weight: w, cycleStartWeight: w } };
     }
     const stage = gzclpStage(exx);
     const w = gzclpWeight(exx);
     const inc = increment(exx);
+    const cycleStart = exx.periodization?.cycleStartWeight ?? w;
     let success;
     if (exx.tier === "T2") success = loggedSets.every((s) => s.reps >= T2_STAGES[stage - 1].reps);
     else if (exx.tier === "T3") success = last.reps >= T3_BONUS_REPS;
     else success = last.reps >= T1_STAGES[stage - 1].reps;
 
-    let stage2, weight2;
+    let stage2, weight2, cycleStart2 = cycleStart;
     if (exx.tier === "T3") { stage2 = stage; weight2 = success ? round5(w + T3_INCREMENT_KG) : w; }
     else if (success) { stage2 = stage; weight2 = round5(w + inc); }
     else if (stage < 3) { stage2 = stage + 1; weight2 = w; }
-    else { stage2 = 1; weight2 = round5(w * STAGE_RESET_PCT); }
+    else if (exx.tier === "T2") { stage2 = 1; weight2 = round5(cycleStart + T2_CYCLE_RESTART_KG); cycleStart2 = weight2; }
+    else { stage2 = 1; weight2 = round5(w * T1_STAGE_RESET_PCT); cycleStart2 = weight2; }
 
-    return { last: { w: last.w, reps: last.reps, logged: true }, periodization: { stage: stage2, weight: weight2 } };
+    return { last: { w: last.w, reps: last.reps, logged: true }, periodization: { stage: stage2, weight: weight2, cycleStartWeight: cycleStart2 } };
   },
   weekLabel() {
     return null;

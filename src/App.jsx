@@ -761,7 +761,11 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, go, equi
   const sessionCount = sessionsFor(history, active.id).length;
   const customWeekLabel = progressionOf(active).weekLabel(active, { sessionCount, program: active });
   const subLine = `${active.name} · ${customWeekLabel || `Week ${programWeek(active)}`} · ${wLabel(live.dayIdx)}`;
-  const totalSets = day.ex.reduce((n, e) => n + setCount(e), 0);
+  const totalSets = day.ex.reduce((n, exx) => {
+    const strat = progressionOf(active, exx);
+    const specs = strat.getSetSpecs ? strat.getSetSpecs(exx, { lastReadiness: active.lastReadiness, program: active, sessionCount }) : null;
+    return n + (specs ? specs.length : setCount(exx));
+  }, 0);
   const doneCount = Object.keys(done).length;
 
   /* ================= REVIEW ================= */
@@ -884,13 +888,13 @@ const PERIODIZATION_INFO = {
   },
   nsuns: {
     label: "Adaptive · Training max",
-    what: "A high-frequency 4-day split where each main lift doubles as a secondary lift on another day, so every lift gets worked twice a week.",
-    how: "Every set's weight is a percentage of a training max you enter before starting. Unlike standard 5/3/1, that max increases every single week — not every 4 weeks — for faster week-to-week progression (+5kg squat/deadlift, +2.5kg bench/OHP). The main lift runs 9 sets from 65% up to a top AMRAP set at 85%, then back down; the secondary lift runs 5 lighter sets.",
+    what: "A high-frequency 4-day split. Bench is trained twice — once lighter, once as the day's heavy top set — while squat and deadlift each get one heavy day and show up again as a lighter secondary lift on another day.",
+    how: "Every set's weight is a percentage of a training max you enter before starting, and that max increases every single week — not every 4 weeks like standard 5/3/1 — for faster week-to-week progression (+5kg squat/deadlift, +2.5kg bench/OHP). The main lift runs 9 sets ramping up to a top single or double (an AMRAP set), then back down for volume; the secondary lift runs 8 lighter sets at a fixed percentage of that same lift's max.",
   },
   gzclp: {
     label: "Adaptive · Learns from your history",
     what: "A 4-day tiered program where each of the 4 main lifts is the primary lift on one day and a secondary lift on another, plus a light accessory lift each day.",
-    how: "Instead of a fixed plan, GZCLP reads what actually happened last session for each lift and adjusts automatically. The primary lift runs 5×3+ → 6×2+ → 10×1+: hit every rep and the weight goes up next time on the same stage; miss and it moves to the next stage instead of stalling. Miss the hardest stage and it deloads 10% and resets to stage one. The secondary lift follows the same stage logic at lower volume (3×10 → 3×8 → 3×6), and the accessory lift simply adds weight once a set clears 25 reps.",
+    how: "Onboarding asks for a tested 5-rep max (5RM) per lift — the primary lift starts at 85% of it, the secondary lift at 70% of that same lift's 5RM. From there GZCLP reads what actually happened last session and adjusts automatically. The primary lift runs 5×3+ → 6×2+ → 10×1+: hit every rep and the weight goes up next time on the same stage; miss and it moves to the next stage instead of stalling. Miss the hardest stage and it calls for retesting your 5RM (approximated here as a 10% deload). The secondary lift follows the same stage logic at lower volume (3×10 → 3×8 → 3×6), but restarts about 10kg heavier than its last cycle's starting weight rather than deloading. The accessory lift simply adds weight once a set clears 25 reps.",
   },
 };
 function ProgressionInfoModal({ template, onClose }) {
@@ -912,7 +916,7 @@ function ProgressionInfoModal({ template, onClose }) {
         </div>
         <div style={{ marginBottom: 14 }}>
           <L>HOW THE PROGRESSION WORKS</L>
-          <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>{info.how}{template.bbbVolume ? " Boring But Big also tacks on 5 extra sets of 10 reps at 50% of your training max after the main work, for added size." : ""}</div>
+          <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>{info.how}{template.bbbVolume ? " Boring But Big also tacks on 5 extra sets of 10 reps at 50% of your estimated true 1-rep max (about 5/9 of your training max) after the main work — dropping to 3 sets during the deload week, for added size." : ""}</div>
         </div>
         <div>
           <L>RECOMMENDED TRAINING DAYS</L>
@@ -957,8 +961,8 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
   const [info, setInfo] = useState(null);
   const [q, setQ] = useState("");
   const [tagFilter, setTagFilter] = useState("All");
-  const startProgram = (id, scheduleDays, periodization) => setPrograms(programs.map((p) => {
-    if (p.id === id) return { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0, completedAt: null, scheduleDays, ...(periodization ? { periodization } : {}) };
+  const startProgram = (id, scheduleDays, maxesPatch) => setPrograms(programs.map((p) => {
+    if (p.id === id) return { ...p, active: true, startedAt: new Date().toISOString(), pausedAt: null, pausedMs: 0, completedAt: null, scheduleDays, ...(maxesPatch || {}) };
     if (p.active) return { ...p, active: false, pausedAt: null, completedAt: new Date().toISOString() };
     return p;
   }));
@@ -1114,24 +1118,23 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
     ? { c: C.amber, t: "Long block. Past ~12 weeks on one unchanging plan, progress tends to plateau and fatigue/boredom build — a deload or switching programs usually restarts gains." }
     : { c: C.green, t: "Ideal range. 8–12 weeks is a solid block to progress through before changing things up." };
 
-  const buildPeriodization = () => Object.fromEntries(neededLiftKeys.map((lk) => [lk, { tm: parseFloat(maxInputs[lk]) || 0 }]));
   const confirmStart = (scheduleDays) => {
-    const periodization = strategy.needsMaxes ? buildPeriodization() : null;
+    const patch = strategy.needsMaxes ? strategy.applyMaxes(program, maxInputs) : null;
     if (strategy.needsMaxes) {
       setMaxes((m) => ({ ...m, ...Object.fromEntries(neededLiftKeys.map((lk) => [lk, { tm: parseFloat(maxInputs[lk]) || 0, updatedAt: new Date().toISOString() }])) }));
     }
-    if (activeElsewhere) { setPendingScheduleDays(scheduleDays); onChange({ ...program, periodization: periodization || program.periodization }); setPending("switch"); }
-    else onStart(scheduleDays, periodization);
+    if (activeElsewhere) { setPendingScheduleDays(scheduleDays); onChange({ ...program, ...(patch || {}) }); setPending("switch"); }
+    else onStart(scheduleDays, patch);
     setStarting(false);
   };
 
   const controls = settingMaxes ? (
     <Card style={{ padding: 18, marginBottom: 14, borderColor: ACC }}>
-      <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: C.ink }}>Set your training maxes</div>
-      <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, margin: "6px 0 14px", lineHeight: 1.45 }}>Every set's weight is calculated from these. A training max is usually about 90% of your true 1-rep max — better to start conservative than to grind failed reps in week one.</div>
+      <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: C.ink }}>Set your {strategy.maxesInputLabel || "training max"}es</div>
+      <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, margin: "6px 0 14px", lineHeight: 1.45 }}>{strategy.maxesHint}</div>
       {neededLiftKeys.map((lk) => (
         <div key={lk} style={{ marginBottom: 12 }}>
-          <label style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6, display: "block" }}>{LIFT_LABELS[lk] || lk} training max (kg)</label>
+          <label style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6, display: "block" }}>{LIFT_LABELS[lk] || lk} {strategy.maxesInputLabel || "training max"} (kg)</label>
           <input inputMode="decimal" value={maxInputs[lk] ?? ""} onChange={(e) => setMaxInputs((m) => ({ ...m, [lk]: e.target.value }))} placeholder="e.g. 100" style={{ width: "100%", height: 48, borderRadius: 11, border: `1.5px solid ${C.line}`, background: C.card, padding: "0 14px", fontFamily: MONO, fontSize: 16, color: C.ink, outline: "none" }} />
         </div>
       ))}
