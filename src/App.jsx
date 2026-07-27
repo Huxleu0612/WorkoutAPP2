@@ -5,6 +5,7 @@ import {
   Search, X, TrendingDown, ArrowUp, ArrowRight, ArrowDown, Zap, Activity, Moon,
   Play, Pause, Square, Trash2, RotateCcw, BarChart3, Clock, Pencil, Target, Calendar,
   Info, Calculator, Settings2, Sparkles,
+  Weight, Repeat, Flame, TrendingUp, RotateCw, Gauge, Rocket, Boxes, PersonStanding, Grid3x3, Hexagon,
 } from "lucide-react";
 import EXERCISES_DATA from "./data/exercises.json";
 import { PROGRAM_CATALOG } from "./data/programCatalog";
@@ -1059,7 +1060,27 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
 }
 
 const tagPill = (color, bg) => ({ fontFamily: MONO, fontSize: 10.5, color, background: bg, padding: "3px 8px", borderRadius: 6, letterSpacing: 0.3, whiteSpace: "nowrap" });
-function catalogIcon(tags) {
+// One distinct, generic (no people/photos) icon per catalog program so the library is easy
+// to tell apart at a glance, rather than several programs sharing one tag-based icon.
+const CATALOG_ICON_BY_ID = {
+  cat_ss: Weight,
+  cat_sl5x5: Repeat,
+  cat_icf: Flame,
+  cat_greyskull: TrendingUp,
+  cat_redditppl: RotateCw,
+  cat_phul: Gauge,
+  cat_phat: Rocket,
+  cat_gvt: Boxes,
+  cat_fullbody3x: PersonStanding,
+  cat_upperlower4: Layers,
+  cat_brosplit: Grid3x3,
+  cat_531: BarChart3,
+  cat_531bbb: Hexagon,
+  cat_nsuns: Zap,
+  cat_gzclp: Target,
+};
+function catalogIcon(templateId, tags) {
+  if (CATALOG_ICON_BY_ID[templateId]) return CATALOG_ICON_BY_ID[templateId];
   if (tags.includes("push/pull/legs")) return Activity;
   if (tags.includes("upper/lower")) return Layers;
   if (tags.includes("body part split")) return Target;
@@ -1119,7 +1140,7 @@ function ProgressionInfoModal({ template, onClose }) {
 }
 
 function CatalogCard({ template, added, onOpen }) {
-  const Icon = catalogIcon(template.tags);
+  const Icon = catalogIcon(template.templateId, template.tags);
   const [showInfo, setShowInfo] = useState(false);
   const adaptive = PERIODIZATION_INFO[template.progressionType];
   return (
