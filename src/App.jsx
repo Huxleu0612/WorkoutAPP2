@@ -256,17 +256,17 @@ function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, childr
     if (!hint || hinted.current) return;
     hinted.current = true;
     const timers = [
-      setTimeout(() => setLifted(true), 500),
-      setTimeout(() => setLifted(false), 760),
-      setTimeout(() => setDragX(56), 820),
-      setTimeout(() => setDragX(0), 1500),
+      setTimeout(() => setLifted(true), 550),
+      setTimeout(() => setLifted(false), 900),
+      setTimeout(() => setDragX(56), 980),
+      setTimeout(() => setDragX(0), 1900),
     ];
     return () => timers.forEach(clearTimeout);
   }, [hint]);
 
   const finish = (commit) => {
     gesture.current.active = false;
-    if (commit) { setDragX(480); setTimeout(onDelete, 180); }
+    if (commit) { setDragX(Math.max(640, window.innerWidth)); setTimeout(onDelete, 340); }
     else setDragX(0);
   };
 
@@ -317,7 +317,7 @@ function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, childr
           touchAction: "pan-y",
           transform: `translateX(${dragX}px)${lifted ? " scale(1.015)" : ""}`,
           boxShadow: lifted ? "0 6px 16px rgba(20,20,30,0.14)" : "none",
-          transition: gesture.current.active ? "none" : "transform 220ms cubic-bezier(.2,.8,.3,1), box-shadow 220ms ease",
+          transition: gesture.current.active ? "none" : "transform 360ms cubic-bezier(.2,.8,.3,1), box-shadow 360ms ease",
         }}
       >
         {children}
@@ -1169,7 +1169,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
   const [progInfo, setProgInfo] = useState(false);
   const [pickDays, setPickDays] = useState(program.scheduleDays?.length ? program.scheduleDays : (DEFAULT_DAYS[Math.min(7, Math.max(1, program.days.length || 3))] || [1, 3, 5]));
   const [detail, setDetail] = useState(null);
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 260, tolerance: 8 } }));
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 450, tolerance: 5 } }));
   const days = program.days;
   const paused = isPaused(program);
   const weeks = program.weeks || 12;
