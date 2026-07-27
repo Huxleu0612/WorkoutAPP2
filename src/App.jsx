@@ -1200,11 +1200,11 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
   const [progInfo, setProgInfo] = useState(false);
   const [pickDays, setPickDays] = useState(program.scheduleDays?.length ? program.scheduleDays : (DEFAULT_DAYS[Math.min(7, Math.max(1, program.days.length || 3))] || [1, 3, 5]));
   const [detail, setDetail] = useState(null);
-  // 500ms is the standard long-press duration on both iOS and Android; 20px tolerance
+  // 500ms is the standard long-press duration on both iOS and Android; 23px tolerance
   // gives extra slack for someone starting to move a beat before the hold fully
   // registers (there's no way to feel 500ms elapse, so people naturally jump the gun) —
   // a real swipe still covers far more distance far faster and won't survive the window.
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 500, tolerance: 20 } }));
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 500, tolerance: 23 } }));
   const days = program.days;
   const paused = isPaused(program);
   const weeks = program.weeks || 12;
