@@ -4,7 +4,7 @@ import {
   Home, Dumbbell, Layers, User, Plus, Minus, Check, ChevronLeft, ChevronRight,
   Search, X, TrendingDown, ArrowUp, ArrowRight, ArrowDown, Zap, Activity, Moon,
   Play, Pause, Square, Trash2, RotateCcw, BarChart3, Clock, Pencil, Target, Calendar,
-  Info, GripVertical, Calculator, Settings2, Sparkles,
+  Info, Calculator, Settings2, Sparkles,
 } from "lucide-react";
 import EXERCISES_DATA from "./data/exercises.json";
 import { PROGRAM_CATALOG } from "./data/programCatalog";
@@ -228,15 +228,100 @@ function ConfirmPanel({ title, body, slideLabel, color = C.red, onConfirm, onCan
   );
 }
 
-const dragHandle = { width: 30, height: 30, borderRadius: 9, border: "none", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "grab", touchAction: "none", flexShrink: 0, WebkitTapHighlightColor: "transparent" };
-function DragHandle({ attributes, listeners }) {
-  return <button {...attributes} {...listeners} style={dragHandle}><GripVertical size={16} color={C.faint} /></button>;
-}
 function Sortable({ id, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   return (
     <div ref={setNodeRef} style={{ transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}>
-      {children({ attributes, listeners })}
+      {children({ attributes, listeners, isDragging })}
+    </div>
+  );
+}
+/* Swipe right (past threshold) to delete; the wrapped content also carries dnd-kit's
+   press-and-hold-to-reorder listeners. `hint` plays a one-shot demo of both gestures
+   shortly after mount so first-time users discover the interaction without being told. */
+function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, children }) {
+  const [dragX, setDragX] = useState(0);
+  const [lifted, setLifted] = useState(false);
+  const rowRef = useRef(null);
+  const gesture = useRef({ active: false, x: 0, y: 0, pointerId: null, locked: null });
+  const hinted = useRef(false);
+  const THRESHOLD = 88;
+  const CAP = 140;
+
+  useEffect(() => {
+    if (disabled) { gesture.current.active = false; setDragX(0); }
+  }, [disabled]);
+
+  useEffect(() => {
+    if (!hint || hinted.current) return;
+    hinted.current = true;
+    const timers = [
+      setTimeout(() => setLifted(true), 500),
+      setTimeout(() => setLifted(false), 760),
+      setTimeout(() => setDragX(56), 820),
+      setTimeout(() => setDragX(0), 1500),
+    ];
+    return () => timers.forEach(clearTimeout);
+  }, [hint]);
+
+  const finish = (commit) => {
+    gesture.current.active = false;
+    if (commit) { setDragX(480); setTimeout(onDelete, 180); }
+    else setDragX(0);
+  };
+
+  const onPointerDown = (e) => {
+    try { dragProps?.onPointerDown?.(e); } catch { /* ignore: dnd-kit's own activation bookkeeping, not ours */ }
+    if (disabled) return;
+    e.stopPropagation();
+    gesture.current = { active: true, x: e.clientX, y: e.clientY, pointerId: e.pointerId, locked: null };
+  };
+  const onPointerMove = (e) => {
+    const g = gesture.current;
+    if (!g.active) return;
+    e.stopPropagation();
+    const dx = e.clientX - g.x, dy = e.clientY - g.y;
+    if (g.locked === null) {
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+      g.locked = Math.abs(dx) > Math.abs(dy) * 1.2 ? "x" : "y";
+      if (g.locked !== "x") { g.active = false; return; }
+      try { rowRef.current?.setPointerCapture(g.pointerId); } catch { /* synthetic/edge-case pointer session, harmless */ }
+    }
+    if (g.locked !== "x") return;
+    e.preventDefault?.();
+    setDragX(dx <= 0 ? 0 : dx > CAP ? CAP + (dx - CAP) * 0.15 : dx);
+  };
+  const onPointerUp = (e) => {
+    const g = gesture.current;
+    if (!g.active) return;
+    e.stopPropagation();
+    finish(g.locked === "x" && dragX > THRESHOLD);
+  };
+
+  return (
+    <div style={{ position: "relative", overflow: "hidden", borderRadius: radius }}>
+      <div style={{ position: "absolute", inset: 0, background: C.red, display: "flex", alignItems: "center", paddingLeft: 22, opacity: Math.min(1, dragX / THRESHOLD) }}>
+        <Trash2 size={17} color="#fff" strokeWidth={2.2} />
+      </div>
+      <div
+        ref={rowRef}
+        {...dragProps?.attributes}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        style={{
+          position: "relative",
+          zIndex: 1,
+          cursor: "grab",
+          touchAction: "pan-y",
+          transform: `translateX(${dragX}px)${lifted ? " scale(1.015)" : ""}`,
+          boxShadow: lifted ? "0 6px 16px rgba(20,20,30,0.14)" : "none",
+          transition: gesture.current.active ? "none" : "transform 220ms cubic-bezier(.2,.8,.3,1), box-shadow 220ms ease",
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -1084,7 +1169,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
   const [progInfo, setProgInfo] = useState(false);
   const [pickDays, setPickDays] = useState(program.scheduleDays?.length ? program.scheduleDays : (DEFAULT_DAYS[Math.min(7, Math.max(1, program.days.length || 3))] || [1, 3, 5]));
   const [detail, setDetail] = useState(null);
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 260, tolerance: 8 } }));
   const days = program.days;
   const paused = isPaused(program);
   const weeks = program.weeks || 12;
@@ -1202,44 +1287,46 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
         <SortableContext items={days.map(dayKey)} strategy={verticalListSortingStrategy}>
           {days.map((d, di) => (
             <Sortable key={dayKey(d)} id={dayKey(d)}>
-              {({ attributes, listeners }) => (
-                <Card style={{ padding: 16, marginBottom: 12 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: d.ex.length ? 12 : 8 }}>
-                    <DragHandle attributes={attributes} listeners={listeners} />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: 1.2, color: ACC, fontWeight: 600 }}>WORKOUT {WLETTER[di] || di + 1}</div>
-                      <input value={d.name} onChange={(e) => renameDay(di, e.target.value)} style={{ width: "100%", fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink, border: "none", outline: "none", background: "transparent", marginTop: 2 }} />
-                    </div>
-                    <button onClick={() => removeDay(di)} style={{ ...miniRound, width: 30, height: 30 }}><Trash2 size={15} color={C.sub} /></button>
-                  </div>
-                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleExDragEnd(di)}>
-                    <SortableContext items={d.ex.map(exKey)} strategy={verticalListSortingStrategy}>
-                      {d.ex.map((e, ei) => {
-                        const full = exFull(e.id);
-                        return (
-                          <Sortable key={exKey(e)} id={exKey(e)}>
-                            {({ attributes, listeners }) => (
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderTop: `1px solid ${C.lineSoft}` }}>
-                                <DragHandle attributes={attributes} listeners={listeners} />
-                                <ExerciseThumb exercise={full} onOpen={setDetail} size={36} />
-                                <div onClick={() => setDetail(full)} style={{ flex: 1, minWidth: 0, cursor: "pointer" }}><div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 550, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{full.name}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{full.bodyPart.toUpperCase()}</div></div>
-                                <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}><button onClick={() => setSets(di, ei, setCount(e) - 1)} style={{ ...miniRound, width: 27, height: 27 }}><Minus size={13} strokeWidth={2.5} /></button><span style={{ fontFamily: MONO, fontSize: 12, color: C.ink, minWidth: 42, textAlign: "center" }}>{setCount(e)} set{setCount(e) !== 1 ? "s" : ""}</span><button onClick={() => setSets(di, ei, setCount(e) + 1)} style={{ ...miniRound, width: 27, height: 27 }}><Plus size={13} strokeWidth={2.5} /></button></div>
-                                <button onClick={() => removeEx(di, ei)} style={{ ...miniRound, width: 30, height: 30, flexShrink: 0 }}><X size={15} color={C.sub} /></button>
-                              </div>
-                            )}
-                          </Sortable>
-                        );
-                      })}
-                    </SortableContext>
-                  </DndContext>
-                  <button onClick={() => setPicker(di)} style={{ width: "100%", height: 46, borderRadius: 11, border: `1.5px dashed ${C.line}`, background: C.card, color: ACC, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: d.ex.length ? 12 : 0, WebkitTapHighlightColor: "transparent" }}><Plus size={16} strokeWidth={2.5} /> Add exercise</button>
-                </Card>
+              {({ attributes, listeners, isDragging }) => (
+                <div style={{ marginBottom: 12 }}>
+                  <SwipeToDelete onDelete={() => removeDay(di)} disabled={isDragging} radius={14} dragProps={{ attributes, onPointerDown: listeners.onPointerDown }}>
+                    <Card style={{ padding: 16 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: d.ex.length ? 12 : 8 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: 1.2, color: ACC, fontWeight: 600 }}>WORKOUT {WLETTER[di] || di + 1}</div>
+                          <input value={d.name} onChange={(e) => renameDay(di, e.target.value)} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink, border: "none", outline: "none", background: "transparent", marginTop: 2 }} />
+                        </div>
+                      </div>
+                      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleExDragEnd(di)}>
+                        <SortableContext items={d.ex.map(exKey)} strategy={verticalListSortingStrategy}>
+                          {d.ex.map((e, ei) => {
+                            const full = exFull(e.id);
+                            return (
+                              <Sortable key={exKey(e)} id={exKey(e)}>
+                                {({ attributes: exAttrs, listeners: exListeners, isDragging: exDragging }) => (
+                                  <SwipeToDelete onDelete={() => removeEx(di, ei)} disabled={exDragging} hint={di === 0 && ei === 0} dragProps={{ attributes: exAttrs, onPointerDown: exListeners.onPointerDown }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderTop: `1px solid ${C.lineSoft}`, background: C.card }}>
+                                      <ExerciseThumb exercise={full} onOpen={setDetail} size={36} />
+                                      <div onClick={() => setDetail(full)} style={{ flex: 1, minWidth: 0, cursor: "pointer" }}><div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 550, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{full.name}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{full.bodyPart.toUpperCase()}</div></div>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}><button onClick={() => setSets(di, ei, setCount(e) - 1)} style={{ ...miniRound, width: 27, height: 27 }}><Minus size={13} strokeWidth={2.5} /></button><span style={{ fontFamily: MONO, fontSize: 12, color: C.ink, minWidth: 42, textAlign: "center" }}>{setCount(e)} set{setCount(e) !== 1 ? "s" : ""}</span><button onClick={() => setSets(di, ei, setCount(e) + 1)} style={{ ...miniRound, width: 27, height: 27 }}><Plus size={13} strokeWidth={2.5} /></button></div>
+                                    </div>
+                                  </SwipeToDelete>
+                                )}
+                              </Sortable>
+                            );
+                          })}
+                        </SortableContext>
+                      </DndContext>
+                      <button onClick={() => setPicker(di)} style={{ width: "100%", height: 46, borderRadius: 11, border: `1.5px dashed ${C.line}`, background: C.card, color: ACC, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: d.ex.length ? 12 : 0, WebkitTapHighlightColor: "transparent" }}><Plus size={16} strokeWidth={2.5} /> Add exercise</button>
+                    </Card>
+                  </SwipeToDelete>
+                </div>
               )}
             </Sortable>
           ))}
         </SortableContext>
       </DndContext>
-      {days.length > 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.faint, padding: "0 4px", margin: "0 0 12px", lineHeight: 1.5 }}>Drag the handle to reorder days and exercises. You'll train Day 1 → Day 2 → … in order, one per training day you pick when you start.</div>}
+      {days.length > 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.faint, padding: "0 4px", margin: "0 0 12px", lineHeight: 1.5 }}>Press and hold to reorder days and exercises. Swipe right to remove one. You'll train Day 1 → Day 2 → … in order, one per training day you pick when you start.</div>}
       <button onClick={addDay} style={{ width: "100%", height: 54, borderRadius: 13, border: "none", background: C.ink, color: "#fff", fontFamily: SANS, fontSize: 15, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 4, marginBottom: 18, WebkitTapHighlightColor: "transparent" }}><Plus size={18} strokeWidth={2.5} /> Add training day</button>
 
       {pending === "pause" && <ConfirmPanel title="Pause this program?" body="Your progress and stats stay intact — the week counter and consistency freeze until you resume. Ideal for a holiday." slideLabel="Slide to pause" color={C.amber} onConfirm={() => { onPause(); setPending(null); }} onCancel={() => setPending(null)} />}
