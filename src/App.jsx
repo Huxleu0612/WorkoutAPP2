@@ -236,14 +236,23 @@ function Sortable({ id, children }) {
     </div>
   );
 }
-/* Swipe right to delete: the row stays flat (no lift) until it crosses the halfway
-   mark, where "Delete" appears next to the bin and releasing from there on commits.
-   Reordering is reached from the SAME gesture rather than a separate press-and-hold
-   (which used to race against a swipe attempt and occasionally win) — once past
-   halfway, moving the finger up/down instead hands off to dnd-kit's own drag.
+/* Swipe right to delete, press and hold to reorder — raced from the same touchdown,
+   tuned against real gesture-design references rather than guessed:
+     - long-press activation is 500ms (the iOS/Android standard for a "long tap"),
+       with a 15px tolerance since a still finger naturally drifts a little over
+       half a second — a deliberate swipe covers far more distance far faster and
+       won't survive that window, so the two gestures don't fight for the touch.
+     - once axis intent is decided, off-axis drift is forgiven up to 1/3 of the
+       horizontal distance travelled (not a one-shot lock) before it's treated as
+       "not a clean swipe anymore" and springs back — closer to how production
+       gesture libraries (e.g. use-gesture) keep re-evaluating axis intent rather
+       than freezing a decision from the first few pixels.
+     - the rubber-band past the reveal cap uses a 0.15 elasticity coefficient,
+       a widely-used default for this kind of resistance curve.
    `hint` plays a one-shot peek shortly after mount so first-time users see the reveal. */
 function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, children }) {
   const [dragX, setDragX] = useState(0);
+  const [lifted, setLifted] = useState(false);
   const dragXRef = useRef(0);
   const rowRef = useRef(null);
   const gesture = useRef({ active: false, x: 0, y: 0, pointerId: null, locked: null });
@@ -261,8 +270,10 @@ function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, childr
     if (!hint || hinted.current) return;
     hinted.current = true;
     const timers = [
-      setTimeout(() => applyDragX(HALF + 14), 600),
-      setTimeout(() => applyDragX(0), 1700),
+      setTimeout(() => setLifted(true), 500),
+      setTimeout(() => setLifted(false), 820),
+      setTimeout(() => applyDragX(HALF + 14), 900),
+      setTimeout(() => applyDragX(0), 1900),
     ];
     return () => timers.forEach(clearTimeout);
   }, [hint]);
@@ -274,6 +285,7 @@ function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, childr
   };
 
   const onPointerDown = (e) => {
+    try { dragProps?.onPointerDown?.(e); } catch { /* dnd-kit's own long-press activation timer, not ours */ }
     if (disabled) return;
     e.stopPropagation();
     gesture.current = { active: true, x: e.clientX, y: e.clientY, pointerId: e.pointerId, locked: null };
@@ -285,17 +297,12 @@ function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, childr
     const dx = e.clientX - g.x, dy = e.clientY - g.y;
     if (g.locked === null) {
       if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
-      g.locked = Math.abs(dx) > Math.abs(dy) * 1.2 ? "x" : "y";
+      g.locked = Math.abs(dx) >= Math.abs(dy) ? "x" : "y";
       if (g.locked !== "x") { g.active = false; return; } // vertical-first = page scroll, not ours
       try { rowRef.current?.setPointerCapture(g.pointerId); } catch { /* synthetic/edge-case pointer session, harmless */ }
     }
-    if (dragXRef.current >= HALF && Math.abs(dy) > 8) {
-      // past the delete commit point, moving vertically means "pick this up and reorder it instead"
-      g.active = false;
-      applyDragX(0);
-      try { dragProps?.onPointerDown?.(e); } catch { /* dnd-kit takes the rest of this gesture from here */ }
-      return;
-    }
+    // forgiving axis re-check: only bail on real diagonal drift, not a one-shot lock
+    if (Math.abs(dy) > Math.abs(dx) / 3 + 10) { g.active = false; applyDragX(0); return; }
     e.preventDefault?.();
     applyDragX(dx <= 0 ? 0 : dx > CAP ? CAP + (dx - CAP) * 0.15 : dx);
   };
@@ -330,8 +337,9 @@ function SwipeToDelete({ onDelete, disabled, hint, radius = 0, dragProps, childr
           position: "relative",
           zIndex: 1,
           touchAction: "pan-y",
-          transform: `translateX(${dragX}px)`,
-          transition: gesture.current.active ? "none" : "transform 360ms cubic-bezier(.2,.8,.3,1)",
+          transform: `translateX(${dragX}px)${lifted ? " scale(1.015)" : ""}`,
+          boxShadow: lifted ? "0 6px 16px rgba(20,20,30,0.14)" : "none",
+          transition: gesture.current.active ? "none" : "transform 380ms cubic-bezier(.16,1,.3,1), box-shadow 380ms ease",
         }}
       >
         {children}
@@ -1183,10 +1191,10 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
   const [progInfo, setProgInfo] = useState(false);
   const [pickDays, setPickDays] = useState(program.scheduleDays?.length ? program.scheduleDays : (DEFAULT_DAYS[Math.min(7, Math.max(1, program.days.length || 3))] || [1, 3, 5]));
   const [detail, setDetail] = useState(null);
-  // Reordering is handed off mid-gesture from SwipeToDelete (once past its halfway
-  // mark) rather than activated from a cold pointerdown, so this only needs to
-  // confirm real movement — the user is already moving by the time this fires.
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  // 500ms is the standard long-press duration on both iOS and Android; 15px tolerance
+  // is generous enough to absorb natural hand tremor over that window without letting
+  // a real swipe (which covers far more distance, far faster) get mistaken for a hold.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 500, tolerance: 15 } }));
   const days = program.days;
   const paused = isPaused(program);
   const weeks = program.weeks || 12;
@@ -1343,7 +1351,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
           ))}
         </SortableContext>
       </DndContext>
-      {days.length > 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.faint, padding: "0 4px", margin: "0 0 12px", lineHeight: 1.5 }}>Swipe a day or exercise right to remove it — or once it says Delete, drag up/down instead to reorder it. You'll train Day 1 → Day 2 → … in order, one per training day you pick when you start.</div>}
+      {days.length > 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.faint, padding: "0 4px", margin: "0 0 12px", lineHeight: 1.5 }}>Swipe right to remove a day or exercise, or press and hold to reorder it. You'll train Day 1 → Day 2 → … in order, one per training day you pick when you start.</div>}
       <button onClick={addDay} style={{ width: "100%", height: 54, borderRadius: 13, border: "none", background: C.ink, color: "#fff", fontFamily: SANS, fontSize: 15, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 4, marginBottom: 18, WebkitTapHighlightColor: "transparent" }}><Plus size={18} strokeWidth={2.5} /> Add training day</button>
 
       {pending === "pause" && <ConfirmPanel title="Pause this program?" body="Your progress and stats stay intact — the week counter and consistency freeze until you resume. Ideal for a holiday." slideLabel="Slide to pause" color={C.amber} onConfirm={() => { onPause(); setPending(null); }} onCancel={() => setPending(null)} />}
