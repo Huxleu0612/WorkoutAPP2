@@ -1318,7 +1318,11 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
       {!program.active && <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "0 2px", margin: "0 0 12px" }}><span style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub }}>Set up your training days below, then hit <b style={{ color: C.ink }}>Start</b> at the bottom.</span></div>}
 
       {days.length === 0 && <Card style={{ padding: 26, textAlign: "center", marginBottom: 12 }}><div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 600, color: C.ink }}>No training days yet</div><div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, marginTop: 6 }}>Add a day, then fill it with exercises.</div></Card>}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDayDragEnd}>
+      {/* autoScroll off: with a day-level and a per-day exercise-level DndContext both
+          mounted at once, letting either auto-scroll the page during a drag desyncs the
+          dragged item's position from the pointer (it visually goes missing/behind other
+          cards mid-scroll). These lists are short enough that manual scroll-then-drag is fine. */}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDayDragEnd} autoScroll={false}>
         <SortableContext items={days.map(dayKey)} strategy={verticalListSortingStrategy}>
           {days.map((d, di) => (
             <Sortable key={dayKey(d)} id={dayKey(d)}>
@@ -1332,7 +1336,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
                           <input value={d.name} onChange={(e) => renameDay(di, e.target.value)} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink, border: "none", outline: "none", background: "transparent", marginTop: 2 }} />
                         </div>
                       </div>
-                      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleExDragEnd(di)}>
+                      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleExDragEnd(di)} autoScroll={false}>
                         <SortableContext items={d.ex.map(exKey)} strategy={verticalListSortingStrategy}>
                           {d.ex.map((e, ei) => {
                             const full = exFull(e.id);
