@@ -237,8 +237,23 @@ function ConfirmPanel({ title, body, slideLabel, color = C.red, onConfirm, onCan
 function useReorderSensors() {
   return useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 500, tolerance: Infinity } }));
 }
+// touch-action is decided by the browser once, at the start of a touch — it can't be
+// switched mid-gesture, so a row that permits native vertical scroll (so a plain scroll
+// works before any hold is registered) can't simply flip that off once a real drag
+// activates. Once dnd-kit confirms a drag (isDragging), forcibly block native scrolling
+// for its duration; without this, moving straight down after a successful long-press
+// gets read as "the user wants to scroll" and the drag loses that fight.
+function useBlockScrollWhileDragging(active) {
+  useEffect(() => {
+    if (!active) return;
+    const block = (e) => e.preventDefault();
+    document.addEventListener("touchmove", block, { passive: false });
+    return () => document.removeEventListener("touchmove", block);
+  }, [active]);
+}
 function Sortable({ id, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  useBlockScrollWhileDragging(isDragging);
   // The moment a long press actually activates dnd-kit's drag, lift the item (scale +
   // shadow) so there's an unmistakable cue that it's safe to move now — without this,
   // people naturally start moving before the hold has truly registered, which cancels
@@ -373,6 +388,7 @@ function ScheduleSwapRow({ dow, draggable, children }) {
   const id = `sched-${dow}`;
   const { attributes, listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({ id, disabled: !draggable });
   const { setNodeRef: setDropRef, isOver } = useDroppable({ id, disabled: !draggable });
+  useBlockScrollWhileDragging(isDragging);
   return (
     <div
       ref={(node) => { setDragRef(node); setDropRef(node); }}
