@@ -92,6 +92,9 @@ const setCount = (exx) => (typeof exx.sets === "number" ? exx.sets : exx.sets.le
 const dayIdCache = new WeakMap();
 let dayIdSeq = 0;
 const dayKey = (d) => { if (!dayIdCache.has(d)) dayIdCache.set(d, `day-${dayIdSeq++}`); return dayIdCache.get(d); };
+const exIdCache = new WeakMap();
+let exIdSeq = 0;
+const exKey = (e) => { if (!exIdCache.has(e)) exIdCache.set(e, `ex-${exIdSeq++}`); return exIdCache.get(e); };
 const N = (sets) => ({ id: null, sets, last: { w: 0, reps: 10, rir: "amber", logged: false } });
 const ex = (id, sets, cfg) => ({ ...N(sets), id, ...cfg });
 
@@ -1092,8 +1095,8 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
   const addDay = () => onChange({ ...program, days: [...days, { name: `Day ${days.length + 1}`, ex: [] }] });
   const renameDay = (di, v) => onChange({ ...program, days: days.map((d, i) => i === di ? { ...d, name: v } : d) });
   const removeDay = (di) => onChange({ ...program, days: days.filter((_, i) => i !== di) });
-  const removeEx = (di, id) => onChange({ ...program, days: days.map((d, i) => i === di ? { ...d, ex: d.ex.filter((e) => e.id !== id) } : d) });
-  const setSets = (di, id, n) => onChange({ ...program, days: days.map((d, i) => i === di ? { ...d, ex: d.ex.map((e) => e.id === id ? { ...e, sets: Math.max(1, Math.min(8, n)) } : e) } : d) });
+  const removeEx = (di, ei) => onChange({ ...program, days: days.map((d, i) => i === di ? { ...d, ex: d.ex.filter((_, j) => j !== ei) } : d) });
+  const setSets = (di, ei, n) => onChange({ ...program, days: days.map((d, i) => i === di ? { ...d, ex: d.ex.map((e, j) => j === ei ? { ...e, sets: Math.max(1, Math.min(8, n)) } : e) } : d) });
   const toggleEx = (di, id) => { const d = days[di]; const has = d.ex.some((e) => e.id === id); onChange({ ...program, days: days.map((x, i) => i === di ? { ...x, ex: has ? x.ex.filter((e) => e.id !== id) : [...x.ex, ex(id, 3)] } : x) }); };
   const toggleDay = (wd) => setPickDays((s) => s.includes(wd) ? s.filter((x) => x !== wd) : [...s, wd].sort());
   const handleDayDragEnd = ({ active, over }) => {
@@ -1105,8 +1108,8 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
   const handleExDragEnd = (di) => ({ active, over }) => {
     if (!over || active.id === over.id) return;
     const d = days[di];
-    const oldIndex = d.ex.findIndex((e) => e.id === active.id);
-    const newIndex = d.ex.findIndex((e) => e.id === over.id);
+    const oldIndex = d.ex.findIndex((e) => exKey(e) === active.id);
+    const newIndex = d.ex.findIndex((e) => exKey(e) === over.id);
     onChange({ ...program, days: days.map((x, i) => i === di ? { ...x, ex: arrayMove(x.ex, oldIndex, newIndex) } : x) });
   };
 
@@ -1210,18 +1213,18 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
                     <button onClick={() => removeDay(di)} style={{ ...miniRound, width: 30, height: 30 }}><Trash2 size={15} color={C.sub} /></button>
                   </div>
                   <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleExDragEnd(di)}>
-                    <SortableContext items={d.ex.map((e) => e.id)} strategy={verticalListSortingStrategy}>
+                    <SortableContext items={d.ex.map(exKey)} strategy={verticalListSortingStrategy}>
                       {d.ex.map((e, ei) => {
                         const full = exFull(e.id);
                         return (
-                          <Sortable key={e.id} id={e.id}>
+                          <Sortable key={exKey(e)} id={exKey(e)}>
                             {({ attributes, listeners }) => (
                               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderTop: `1px solid ${C.lineSoft}`, flexWrap: "wrap" }}>
                                 <DragHandle attributes={attributes} listeners={listeners} />
                                 <ExerciseThumb exercise={full} onOpen={setDetail} size={36} />
                                 <div onClick={() => setDetail(full)} style={{ flex: 1, minWidth: 100, cursor: "pointer" }}><div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 550, color: C.ink }}>{full.name}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 2 }}>{full.bodyPart.toUpperCase()}</div></div>
-                                <div style={{ display: "flex", alignItems: "center", gap: 5 }}><button onClick={() => setSets(di, e.id, setCount(e) - 1)} style={{ ...miniRound, width: 27, height: 27 }}><Minus size={13} strokeWidth={2.5} /></button><span style={{ fontFamily: MONO, fontSize: 12, color: C.ink, minWidth: 42, textAlign: "center" }}>{setCount(e)} set{setCount(e) !== 1 ? "s" : ""}</span><button onClick={() => setSets(di, e.id, setCount(e) + 1)} style={{ ...miniRound, width: 27, height: 27 }}><Plus size={13} strokeWidth={2.5} /></button></div>
-                                <button onClick={() => removeEx(di, e.id)} style={{ ...miniRound, width: 30, height: 30 }}><X size={15} color={C.sub} /></button>
+                                <div style={{ display: "flex", alignItems: "center", gap: 5 }}><button onClick={() => setSets(di, ei, setCount(e) - 1)} style={{ ...miniRound, width: 27, height: 27 }}><Minus size={13} strokeWidth={2.5} /></button><span style={{ fontFamily: MONO, fontSize: 12, color: C.ink, minWidth: 42, textAlign: "center" }}>{setCount(e)} set{setCount(e) !== 1 ? "s" : ""}</span><button onClick={() => setSets(di, ei, setCount(e) + 1)} style={{ ...miniRound, width: 27, height: 27 }}><Plus size={13} strokeWidth={2.5} /></button></div>
+                                <button onClick={() => removeEx(di, ei)} style={{ ...miniRound, width: 30, height: 30 }}><X size={15} color={C.sub} /></button>
                               </div>
                             )}
                           </Sortable>
