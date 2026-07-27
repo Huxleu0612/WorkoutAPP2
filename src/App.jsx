@@ -11,6 +11,7 @@ import { PROGRAM_CATALOG } from "./data/programCatalog";
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
+import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { progressionOf } from "./lib/progression";
 import { calcPlateLoad, DEFAULT_EQUIPMENT } from "./lib/plates";
 
@@ -1200,6 +1201,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
   const [progInfo, setProgInfo] = useState(false);
   const [pickDays, setPickDays] = useState(program.scheduleDays?.length ? program.scheduleDays : (DEFAULT_DAYS[Math.min(7, Math.max(1, program.days.length || 3))] || [1, 3, 5]));
   const [detail, setDetail] = useState(null);
+  const [activeDayIdx, setActiveDayIdx] = useState(null); // which day's exercise list is mid-reorder, for the spotlight/fence treatment
   // 500ms is the standard long-press duration on both iOS and Android. Tolerance is
   // uncapped: no amount of movement during the hold cancels the pending activation —
   // only releasing before 500ms is up does. A real swipe (released well under 500ms)
@@ -1226,6 +1228,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
     onChange({ ...program, days: arrayMove(days, oldIndex, newIndex) });
   };
   const handleExDragEnd = (di) => ({ active, over }) => {
+    setActiveDayIdx(null);
     if (!over || active.id === over.id) return;
     const d = days[di];
     const oldIndex = d.ex.findIndex((e) => exKey(e) === active.id);
@@ -1321,22 +1324,29 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
       {/* autoScroll off: with a day-level and a per-day exercise-level DndContext both
           mounted at once, letting either auto-scroll the page during a drag desyncs the
           dragged item's position from the pointer (it visually goes missing/behind other
-          cards mid-scroll). These lists are short enough that manual scroll-then-drag is fine. */}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDayDragEnd} autoScroll={false}>
+          cards mid-scroll). These lists are short enough that manual scroll-then-drag is fine.
+          While an exercise is mid-reorder, its own day's card is spotlighted (raised above a
+          full-screen scrim) and the drag itself is fenced to that card via dnd-kit's
+          restrictToParentElement modifier — reordering an exercise was never meant to move it
+          into a different day, so now it's visually and functionally impossible to. */}
+      {activeDayIdx != null && <div style={{ position: "fixed", inset: 0, background: "rgba(10,12,16,0.6)", zIndex: 5, pointerEvents: "none" }} />}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDayDragEnd} autoScroll={false} modifiers={[restrictToVerticalAxis]}>
         <SortableContext items={days.map(dayKey)} strategy={verticalListSortingStrategy}>
-          {days.map((d, di) => (
+          {days.map((d, di) => {
+            const spotlighted = activeDayIdx === di;
+            return (
             <Sortable key={dayKey(d)} id={dayKey(d)}>
               {({ attributes, listeners, isDragging }) => (
-                <div style={{ marginBottom: 12 }}>
+                <div style={{ marginBottom: 12, position: "relative", zIndex: spotlighted ? 6 : "auto" }}>
                   <SwipeToDelete onDelete={() => removeDay(di)} disabled={isDragging} radius={14} dragProps={{ attributes, onPointerDown: listeners.onPointerDown }}>
-                    <Card style={{ padding: 16 }}>
+                    <Card style={{ padding: 16, ...(spotlighted ? { border: `2px solid ${ACC}`, boxShadow: "0 10px 28px rgba(0,0,0,0.3)" } : {}) }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: d.ex.length ? 12 : 8 }}>
                         <div style={{ flex: 1 }}>
                           <div style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: 1.2, color: ACC, fontWeight: 600 }}>WORKOUT {WLETTER[di] || di + 1}</div>
                           <input value={d.name} onChange={(e) => renameDay(di, e.target.value)} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink, border: "none", outline: "none", background: "transparent", marginTop: 2 }} />
                         </div>
                       </div>
-                      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleExDragEnd(di)} autoScroll={false}>
+                      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleExDragEnd(di)} onDragStart={() => setActiveDayIdx(di)} onDragCancel={() => setActiveDayIdx(null)} autoScroll={false} modifiers={[restrictToVerticalAxis, restrictToParentElement]}>
                         <SortableContext items={d.ex.map(exKey)} strategy={verticalListSortingStrategy}>
                           {d.ex.map((e, ei) => {
                             const full = exFull(e.id);
@@ -1362,7 +1372,8 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
                 </div>
               )}
             </Sortable>
-          ))}
+            );
+          })}
         </SortableContext>
       </DndContext>
       {days.length > 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.faint, padding: "0 4px", margin: "0 0 12px", lineHeight: 1.5 }}>Swipe right to remove a day or exercise, or press and hold to reorder it. You'll train Day 1 → Day 2 → … in order, one per training day you pick when you start.</div>}
