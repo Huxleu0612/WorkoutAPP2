@@ -1219,12 +1219,12 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
                         return (
                           <Sortable key={exKey(e)} id={exKey(e)}>
                             {({ attributes, listeners }) => (
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderTop: `1px solid ${C.lineSoft}`, flexWrap: "wrap" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderTop: `1px solid ${C.lineSoft}` }}>
                                 <DragHandle attributes={attributes} listeners={listeners} />
                                 <ExerciseThumb exercise={full} onOpen={setDetail} size={36} />
-                                <div onClick={() => setDetail(full)} style={{ flex: 1, minWidth: 100, cursor: "pointer" }}><div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 550, color: C.ink }}>{full.name}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 2 }}>{full.bodyPart.toUpperCase()}</div></div>
-                                <div style={{ display: "flex", alignItems: "center", gap: 5 }}><button onClick={() => setSets(di, ei, setCount(e) - 1)} style={{ ...miniRound, width: 27, height: 27 }}><Minus size={13} strokeWidth={2.5} /></button><span style={{ fontFamily: MONO, fontSize: 12, color: C.ink, minWidth: 42, textAlign: "center" }}>{setCount(e)} set{setCount(e) !== 1 ? "s" : ""}</span><button onClick={() => setSets(di, ei, setCount(e) + 1)} style={{ ...miniRound, width: 27, height: 27 }}><Plus size={13} strokeWidth={2.5} /></button></div>
-                                <button onClick={() => removeEx(di, ei)} style={{ ...miniRound, width: 30, height: 30 }}><X size={15} color={C.sub} /></button>
+                                <div onClick={() => setDetail(full)} style={{ flex: 1, minWidth: 0, cursor: "pointer" }}><div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 550, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{full.name}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{full.bodyPart.toUpperCase()}</div></div>
+                                <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}><button onClick={() => setSets(di, ei, setCount(e) - 1)} style={{ ...miniRound, width: 27, height: 27 }}><Minus size={13} strokeWidth={2.5} /></button><span style={{ fontFamily: MONO, fontSize: 12, color: C.ink, minWidth: 42, textAlign: "center" }}>{setCount(e)} set{setCount(e) !== 1 ? "s" : ""}</span><button onClick={() => setSets(di, ei, setCount(e) + 1)} style={{ ...miniRound, width: 27, height: 27 }}><Plus size={13} strokeWidth={2.5} /></button></div>
+                                <button onClick={() => removeEx(di, ei)} style={{ ...miniRound, width: 30, height: 30, flexShrink: 0 }}><X size={15} color={C.sub} /></button>
                               </div>
                             )}
                           </Sortable>
