@@ -1,12 +1,24 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from "recharts";
+// Phosphor is the design system's icon set. Aliased to the previous lucide names so the
+// ~235 call sites stay untouched; Phosphor has no strokeWidth prop, so the strokeWidth
+// props scattered through those call sites are inert and get cleaned up per screen.
 import {
-  Home, Dumbbell, Layers, User, Plus, Minus, Check, ChevronLeft, ChevronRight,
-  Search, X, TrendingDown, ArrowUp, ArrowRight, ArrowDown, Zap, Activity, Moon,
-  Play, Pause, Square, Trash2, RotateCcw, BarChart3, Clock, Pencil, Target, Calendar,
-  Info, Calculator, Settings2, Sparkles,
-  Weight, Repeat, Flame, TrendingUp, RotateCw, Gauge, Rocket, Boxes, PersonStanding, Grid3x3, Hexagon,
-} from "lucide-react";
+  HouseIcon as Home, BarbellIcon as Dumbbell, StackIcon as Layers, UserIcon as User,
+  PlusIcon as Plus, MinusIcon as Minus, CheckIcon as Check,
+  CaretLeftIcon as ChevronLeft, CaretRightIcon as ChevronRight,
+  MagnifyingGlassIcon as Search, XIcon as X,
+  TrendDownIcon as TrendingDown, ArrowUpIcon as ArrowUp, ArrowRightIcon as ArrowRight,
+  ArrowDownIcon as ArrowDown, LightningIcon as Zap, PulseIcon as Activity, MoonIcon as Moon,
+  PlayIcon as Play, PauseIcon as Pause, StopIcon as Square, TrashIcon as Trash2,
+  ArrowCounterClockwiseIcon as RotateCcw, ChartBarIcon as BarChart3, ClockIcon as Clock,
+  PencilSimpleIcon as Pencil, TargetIcon as Target, CalendarBlankIcon as Calendar,
+  InfoIcon as Info, CalculatorIcon as Calculator, SlidersHorizontalIcon as Settings2,
+  SparkleIcon as Sparkles, BarbellIcon as Weight, RepeatIcon as Repeat, FireIcon as Flame,
+  TrendUpIcon as TrendingUp, ArrowClockwiseIcon as RotateCw, GaugeIcon as Gauge,
+  RocketIcon as Rocket, CubeIcon as Boxes, PersonSimpleIcon as PersonStanding,
+  GridNineIcon as Grid3x3, HexagonIcon as Hexagon, MedalIcon as Medal,
+} from "@phosphor-icons/react";
 import EXERCISES_DATA from "./data/exercises.json";
 import { PROGRAM_CATALOG } from "./data/programCatalog";
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, useDraggable, useDroppable } from "@dnd-kit/core";
@@ -1097,7 +1109,7 @@ function catalogIcon(templateId, tags) {
   if (tags.includes("upper/lower")) return Layers;
   if (tags.includes("body part split")) return Target;
   if (tags.includes("531") || tags.includes("gzcl")) return BarChart3;
-  if (tags.includes("powerlifting")) return Dumbbell;
+  if (tags.includes("powerlifting")) return Medal;
   return Zap;
 }
 
@@ -1502,7 +1514,7 @@ function ExerciseThumb({ exercise, onOpen, size = 44 }) {
   return (
     <div onClick={(ev) => { ev.stopPropagation(); onOpen(exercise); }} style={{ position: "relative", width: size, height: size, flexShrink: 0, cursor: "pointer" }}>
       {exercise.image ? <img src={exercise.image} alt="" loading="lazy" style={{ width: size, height: size, borderRadius: 9, objectFit: "cover", background: C.page, display: "block" }} /> : <div style={{ width: size, height: size, borderRadius: 9, background: C.page, display: "flex", alignItems: "center", justifyContent: "center" }}><Dumbbell size={size * 0.4} color={C.faint} /></div>}
-      {exercise.gif && <div style={{ position: "absolute", inset: 0, background: "rgba(8,9,14,0.42)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ width: 16, height: 16, borderRadius: 8, background: "rgba(233,233,237,0.92)", display: "flex", alignItems: "center", justifyContent: "center" }}><Play size={8} color={C.ink} fill={C.ink} /></div></div>}
+      {exercise.gif && <div style={{ position: "absolute", inset: 0, background: "rgba(8,9,14,0.42)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ width: 16, height: 16, borderRadius: 8, background: "rgba(233,233,237,0.92)", display: "flex", alignItems: "center", justifyContent: "center" }}><Play size={9} color={C.page} weight="fill" /></div></div>}
     </div>
   );
 }
