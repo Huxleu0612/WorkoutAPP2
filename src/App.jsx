@@ -18,6 +18,7 @@ import {
   TrendUpIcon as TrendingUp, ArrowClockwiseIcon as RotateCw, GaugeIcon as Gauge,
   RocketIcon as Rocket, CubeIcon as Boxes, PersonSimpleIcon as PersonStanding,
   GridNineIcon as Grid3x3, HexagonIcon as Hexagon, MedalIcon as Medal,
+  BookOpenIcon as BookOpen, WalletIcon as Wallet, LockSimpleIcon as LockSimple,
 } from "@phosphor-icons/react";
 import EXERCISES_DATA from "./data/exercises.json";
 import { PROGRAM_CATALOG } from "./data/programCatalog";
@@ -635,7 +636,7 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
           <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, fontWeight: 500 }}>{greet},</div>
           <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 720, color: C.ink, margin: "2px 0 0", letterSpacing: -0.6 }}>{profile.name || "Athlete"}</h1>
         </div>
-        <div style={{ width: 46, height: 46, borderRadius: 23, background: C.graphite, color: C.onDark, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 17, fontWeight: 650 }}>{(profile.name || "?").split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}</div>
+        <button onClick={() => go("profile")} aria-label="Settings" style={{ width: 46, height: 46, borderRadius: 23, border: `1px solid ${C.onDarkLine}`, background: C.graphite, color: C.onDark, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 17, fontWeight: 650, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{(profile.name || "?").split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}</button>
       </div>
 
       {/* WEEK STREAK */}
@@ -930,6 +931,14 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
           </div>
         </DndContext>
         {active.scheduleDays.length > 1 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.faint, padding: "8px 4px 0", lineHeight: 1.5 }}>Press and hold a workout, then drag it onto another day to swap which workout runs when.</div>}
+        <button onClick={() => go("programs")} style={{ width: "100%", marginTop: 18, padding: "16px 18px", background: C.card, borderRadius: 14, border: `1px solid ${C.line}`, cursor: "pointer", display: "flex", alignItems: "center", gap: 12, WebkitTapHighlightColor: "transparent" }}>
+          <Layers size={19} color={C.sub} />
+          <div style={{ flex: 1, textAlign: "left" }}>
+            <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink }}>Manage programs</div>
+            <div style={{ fontFamily: SANS, fontSize: 12, color: C.sub, marginTop: 2 }}>Browse the library or edit your own.</div>
+          </div>
+          <ChevronRight size={16} color={C.faint} />
+        </button>
         {calcOpen && <PlateCalculator targetKg={calcOpen.initialKg} equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setCalcOpen(null)} />}
       </div>
     );
@@ -965,7 +974,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
         <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 680, color: C.ink }}>Session saved</div>
         <div style={{ fontFamily: SANS, fontSize: 14, color: C.sub, marginTop: 8, lineHeight: 1.5 }}>{savedCount} sets recorded. Your next session and recommendations are updated.</div>
       </Card>
-      <BigButton tone="acc" onClick={() => go("home")}>Take me back to dashboard</BigButton>
+      <BigButton tone="acc" onClick={() => go("today")}>Take me back to today</BigButton>
       <div style={{ height: 10 }} />
       <BigButton tone="ghost" onClick={() => setPhase("schedule")}>Back to this week</BigButton>
     </div>
@@ -1270,6 +1279,7 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
 
   return (
     <div style={{ padding: "6px 18px 24px" }}>
+      <button onClick={() => go("train")} style={backBtn}><ChevronLeft size={18} /> Train</button>
       <PageTitle sub="Real programs · browse or build your own">Programs</PageTitle>
 
       <SectionLabel>Your programs</SectionLabel>
@@ -1707,7 +1717,7 @@ function Picker({ inDay, onToggle, onBack, dayName }) {
    PROFILE
 ================================================================ */
 const cmToFtIn = (cm) => { const t = cm / 2.54; const f = Math.floor(t / 12); const i = Math.round(t - f * 12); return `${f}'${i}"`; };
-function Profile({ profile, setProfile, programs, history, weightLog, onReset }) {
+function Profile({ profile, setProfile, programs, history, weightLog, onReset, go }) {
   const [view, setView] = useState("main");
   const [confirmReset, setConfirmReset] = useState(false);
   const setP = (k, v) => setProfile((p) => ({ ...p, [k]: v }));
@@ -1722,6 +1732,7 @@ function Profile({ profile, setProfile, programs, history, weightLog, onReset })
 
   return (
     <div style={{ padding: "6px 18px 24px" }}>
+      <button onClick={() => go("today")} style={backBtn}><ChevronLeft size={18} /> Today</button>
       <PageTitle sub="Account">Profile</PageTitle>
       <Card style={{ padding: 20, marginBottom: 16, display: "flex", alignItems: "center", gap: 16 }}>
         <div style={{ width: 60, height: 60, borderRadius: 30, background: C.graphite, color: C.onDark, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 22, fontWeight: 650 }}>{(profile.name || "?").split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}</div>
@@ -1782,6 +1793,34 @@ function Profile({ profile, setProfile, programs, history, weightLog, onReset })
 /* ================================================================
    APP SHELL
 ================================================================ */
+/* ================================================================
+   PILLARS — the five lifestyle modules. Train ships first; the rest are
+   visible but locked. Adding one later is a `locked: false` flip plus a
+   render line, not a shell rewrite.
+================================================================ */
+const PILLARS = [
+  { id: "today", label: "Today", Icon: Home },
+  { id: "train", label: "Train", Icon: Dumbbell },
+  { id: "read", label: "Read", Icon: BookOpen, locked: true, blurb: "Your reading list, daily minutes and highlights will live here." },
+  { id: "habits", label: "Habits", Icon: Target, locked: true, blurb: "Daily habits and the streaks you build on them will live here." },
+  { id: "finance", label: "Finance", Icon: Wallet, locked: true, blurb: "Budgets, savings and your mortgage will live here." },
+];
+// screens reachable by `go()` but with no tab of their own — they light up their parent pillar
+const TAB_PARENT = { programs: "train", profile: "today" };
+
+function LockedScreen({ label, Icon, blurb }) {
+  return (
+    <div style={{ padding: "78px 34px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+      <div style={{ width: 86, height: 86, borderRadius: 43, border: `2px dashed ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 22 }}>
+        <Icon size={34} color={C.faint} />
+      </div>
+      <div style={{ fontFamily: SANS, fontSize: 19, fontWeight: 500, color: C.sub, letterSpacing: -0.2 }}>{label}</div>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: 1.5, textTransform: "uppercase", color: C.faint, fontWeight: 500, margin: "10px 0 12px" }}>Not built yet</div>
+      <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.faint, lineHeight: 1.6, maxWidth: 250 }}>{blurb}</div>
+    </div>
+  );
+}
+
 export default function App() {
   useState(() => { const v = loadLS("wa_ver", null); if (v !== VER) { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history"].forEach((k) => localStorage.removeItem(k)); } catch {} saveLS("wa_ver", VER); } return null; });
   const [profile, setProfile] = usePersist("wa_profile", { onboarded: false });
@@ -1791,7 +1830,7 @@ export default function App() {
   const [draft, setDraft] = usePersist("wa_draft", null);
   const [maxes, setMaxes] = usePersist("wa_maxes", {});
   const [equipment, setEquipment] = usePersist("wa_equipment", DEFAULT_EQUIPMENT);
-  const [tab, setTab] = useState("home");
+  const [tab, setTab] = useState("today");
   // one-time cleanup: drop the old auto-seeded p1/p2/p3 defaults if they were never actually started
   useEffect(() => { setPrograms((ps) => ps.filter((p) => !(["p1", "p2", "p3"].includes(p.id) && !p.startedAt && !p.completedAt))); }, []);
 
@@ -1799,20 +1838,29 @@ export default function App() {
 
   const finishSession = (session, updatedDays, readiness) => { setPrograms((ps) => ps.map((p) => p.id === session.programId ? { ...p, days: updatedDays, lastReadiness: readiness } : p)); setHistory((h) => [...h, session]); };
   const reorderSchedule = (id, scheduleDays) => setPrograms((ps) => ps.map((p) => p.id === id ? { ...p, scheduleDays } : p));
-  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setProfile({ onboarded: false }); setTab("home"); };
+  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setProfile({ onboarded: false }); setTab("today"); };
 
-  const tabs = [{ id: "home", icon: Home, label: "Dashboard" }, { id: "train", icon: Dumbbell, label: "Train" }, { id: "programs", icon: Layers, label: "Programs" }, { id: "profile", icon: User, label: "Profile" }];
+  const pillar = PILLARS.find((p) => p.id === tab);
+  const navId = TAB_PARENT[tab] ?? tab;
   return (
     <div className="app-shell" style={{ background: C.page, display: "flex", justifyContent: "center", fontFamily: SANS }}>
       <div style={{ width: "100%", maxWidth: 430, background: C.page, display: "flex", flexDirection: "column", height: "100%" }}>
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
-          {tab === "home" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} go={setTab} />}
+          {pillar?.locked && <LockedScreen label={pillar.label} Icon={pillar.Icon} blurb={pillar.blurb} />}
+          {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} go={setTab} />}
           {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} onReorderSchedule={reorderSchedule} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
           {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} go={setTab} />}
-          {tab === "profile" && <Profile profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} />}
+          {tab === "profile" && <Profile profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} go={setTab} />}
         </div>
         <div style={{ flexShrink: 0, background: "rgba(22,24,38,0.92)", backdropFilter: "blur(12px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "8px 8px max(22px, env(safe-area-inset-bottom))" }}>
-          {tabs.map((t) => { const on = tab === t.id, Icon = t.icon; return (<button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "8px 0", WebkitTapHighlightColor: "transparent" }}><Icon size={23} color={on ? ACC : C.faint} strokeWidth={on ? 2.4 : 2} /><span style={{ fontFamily: SANS, fontSize: 11, fontWeight: on ? 650 : 500, color: on ? C.ink : C.faint }}>{t.label}</span></button>); })}
+          {PILLARS.map((p) => { const on = navId === p.id, Icon = p.Icon; return (
+            <button key={p.id} onClick={() => setTab(p.id)} style={{ flex: 1, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "8px 0", WebkitTapHighlightColor: "transparent" }}>
+              <div style={{ position: "relative", display: "flex" }}>
+                <Icon size={23} color={on ? ACC : C.faint} weight={on ? "fill" : "regular"} />
+                {p.locked && <div style={{ position: "absolute", right: -5, bottom: -2, width: 13, height: 13, borderRadius: 7, background: C.faint, display: "flex", alignItems: "center", justifyContent: "center" }}><LockSimple size={8} weight="fill" color={C.page} /></div>}
+              </div>
+              <span style={{ fontFamily: SANS, fontSize: 11, fontWeight: on ? 600 : 500, color: on ? ACC : C.faint }}>{p.label}</span>
+            </button>); })}
         </div>
       </div>
     </div>
