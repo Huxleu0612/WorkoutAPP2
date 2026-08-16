@@ -593,7 +593,7 @@ function StatsView({ sessions, unit, title, sub, onBack }) {
 /* ================================================================
    DASHBOARD
 ================================================================ */
-function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) {
+function Dashboard({ profile, weightLog, setWeightLog, programs, history, go, onSettings }) {
   const [view, setView] = useState("main");
   const [wkOffset, setWkOffset] = useState(0);
   const [selKey, setSelKey] = useState(ymd(new Date()));
@@ -672,7 +672,7 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, margin: "8px 0 20px" }}>
         <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.54, lineHeight: 1.15 }}>{greet}, {profile.name || "Athlete"}</h1>
-        <button onClick={() => go("profile")} aria-label="Settings" style={{ width: 34, height: 34, flexShrink: 0, borderRadius: 17, border: `1px solid ${AC.a800}`, background: AC.a900, color: NEU.n200, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 13, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{(profile.name || "?").trim().charAt(0).toUpperCase() || "?"}</button>
+        <button onClick={onSettings} aria-label="Settings" style={{ width: 34, height: 34, flexShrink: 0, borderRadius: 17, border: `1px solid ${AC.a800}`, background: AC.a900, color: NEU.n200, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 13, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{(profile.name || "?").trim().charAt(0).toUpperCase() || "?"}</button>
       </div>
 
       {/* WEEK TRACKER */}
@@ -1812,29 +1812,34 @@ function Picker({ inDay, onToggle, onBack, dayName }) {
 }
 
 /* ================================================================
-   PROFILE
+   SETTINGS — a bottom sheet off the Today avatar, not a tab of its own
 ================================================================ */
 const cmToFtIn = (cm) => { const t = cm / 2.54; const f = Math.floor(t / 12); const i = Math.round(t - f * 12); return `${f}'${i}"`; };
-function Profile({ profile, setProfile, programs, history, weightLog, onReset, go }) {
+function SettingsSheet({ profile, setProfile, programs, history, weightLog, onReset, equipment, setEquipment, onClose }) {
   const [view, setView] = useState("main");
   const [confirmReset, setConfirmReset] = useState(false);
+  const [editingEquip, setEditingEquip] = useState(false);
   const setP = (k, v) => setProfile((p) => ({ ...p, [k]: v }));
   const u = profile.unit;
   const active = activeProgram(programs);
   const cur = lastWeight(weightLog) ?? profile.currentKg;
   const g = deriveGoal(profile, cur);
-
-  if (view === "report") return <StatsView sessions={history} unit={u} title="All-time report" sub={`Since ${fmtDate(profile.createdAt)}`} onBack={() => setView("main")} />;
-
   const weeksToGoal = g.type !== "maintain" && g.mag > 0 ? Math.ceil(Math.abs(g.goal - cur) / g.mag) : null;
 
   return (
-    <div style={{ padding: "6px 18px 24px" }}>
-      <button onClick={() => go("today")} style={backBtn}><ChevronLeft size={18} /> Today</button>
-      <PageTitle sub="Account">Profile</PageTitle>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: C.scrim, zIndex: 58, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "20px 20px 0 0", padding: "18px 20px 34px", maxHeight: "86vh", overflowY: "auto" }}>
+        <div style={{ width: 38, height: 4, borderRadius: 2, background: C.line, margin: "0 auto 16px" }} />
+        {view === "report" ? (
+          <StatsView sessions={history} unit={u} title="All-time report" sub={`Since ${fmtDate(profile.createdAt)}`} onBack={() => setView("main")} />
+        ) : (<>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+          <h2 style={{ fontFamily: SANS, fontSize: 22, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.4 }}>Settings</h2>
+          <button onClick={onClose} style={miniRound}><X size={18} /></button>
+        </div>
       <Card style={{ padding: 20, marginBottom: 16, display: "flex", alignItems: "center", gap: 16 }}>
-        <div style={{ width: 60, height: 60, borderRadius: 30, background: C.graphite, color: C.onDark, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 22, fontWeight: 650 }}>{(profile.name || "?").split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}</div>
-        <div style={{ flex: 1 }}><div style={{ display: "flex", alignItems: "center", gap: 6 }}><input value={profile.name || ""} onChange={(e) => setP("name", e.target.value)} style={{ border: "none", outline: "none", background: "transparent", fontFamily: SANS, fontSize: 19, fontWeight: 680, color: C.ink, width: "100%" }} /><Pencil size={13} color={C.faint} /></div><div style={{ fontFamily: MONO, fontSize: 12, color: C.sub, marginTop: 2 }}>Age {ageFrom(profile.birthDate)} · since {fmtDate(profile.createdAt)}</div></div>
+        <div style={{ width: 60, height: 60, borderRadius: 30, border: `1px solid ${AC.a800}`, background: AC.a900, color: NEU.n200, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 22, fontWeight: 500 }}>{(profile.name || "?").split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}</div>
+        <div style={{ flex: 1 }}><div style={{ display: "flex", alignItems: "center", gap: 6 }}><input value={profile.name || ""} onChange={(e) => setP("name", e.target.value)} style={{ border: "none", outline: "none", background: "transparent", fontFamily: SANS, fontSize: 19, fontWeight: 500, color: C.ink, width: "100%" }} /><Pencil size={13} color={C.faint} /></div><div style={{ fontFamily: MONO, fontSize: 12, color: C.sub, marginTop: 2 }}>Age {ageFrom(profile.birthDate)} · since {fmtDate(profile.createdAt)}</div></div>
       </Card>
 
       <button onClick={() => setView("report")} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 16, marginBottom: 16, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}><div style={{ width: 40, height: 40, borderRadius: 11, background: ACC_BG, display: "flex", alignItems: "center", justifyContent: "center" }}><BarChart3 size={20} color={ACC} /></div><div style={{ flex: 1 }}><div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 650, color: C.ink }}>All-time report</div><div style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub, marginTop: 2 }}>Every stat since you started</div></div><ChevronRight size={20} color={C.faint} /></button>
@@ -1866,6 +1871,13 @@ function Profile({ profile, setProfile, programs, history, weightLog, onReset, g
         <Row label="Height" last><div style={{ width: 132 }}><Segmented small options={[{ v: "cm", l: "cm" }, { v: "ft", l: "ft / in" }]} value={profile.heightUnit} onChange={(v) => setP("heightUnit", v)} /></div></Row>
       </Card>
 
+      <SectionLabel icon={<Calculator size={13} />}>Equipment</SectionLabel>
+      <Card style={{ padding: "4px 16px", marginBottom: 16 }}>
+        <Row label="Bars and plates" sub="What the plate calculator loads from" last>
+          <button onClick={() => setEditingEquip(true)} style={{ height: 34, padding: "0 13px", borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 13, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Edit</button>
+        </Row>
+      </Card>
+
       <SectionLabel icon={<Clock size={13} />}>Daily reminder</SectionLabel>
       <Card style={{ padding: "4px 16px", marginBottom: 16 }}>
         <Row label="Reminder" sub="Nudge to log your weigh-in"><Switch on={profile.reminderOn} onToggle={() => setP("reminderOn", !profile.reminderOn)} /></Row>
@@ -1884,6 +1896,9 @@ function Profile({ profile, setProfile, programs, history, weightLog, onReset, g
 
       <SectionLabel>About</SectionLabel>
       <Card style={{ padding: "4px 16px" }}><Row label="Version" last><span style={{ fontFamily: MONO, fontSize: 14, color: C.sub }}>1.0.0 · prototype</span></Row></Card>
+        </>)}
+        {editingEquip && <EquipmentManager equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setEditingEquip(false)} />}
+      </div>
     </div>
   );
 }
@@ -1904,7 +1919,7 @@ const PILLARS = [
   { id: "finance", label: "Finance", Icon: Wallet, locked: true, blurb: "Budgets, savings and your mortgage will live here." },
 ];
 // screens reachable by `go()` but with no tab of their own — they light up their parent pillar
-const TAB_PARENT = { programs: "train", profile: "today" };
+const TAB_PARENT = { programs: "train" };
 
 function LockedScreen({ label, Icon, blurb }) {
   return (
@@ -1929,6 +1944,7 @@ export default function App() {
   const [maxes, setMaxes] = usePersist("wa_maxes", {});
   const [equipment, setEquipment] = usePersist("wa_equipment", DEFAULT_EQUIPMENT);
   const [tab, setTab] = useState("today");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // one-time cleanup: drop the old auto-seeded p1/p2/p3 defaults if they were never actually started
   useEffect(() => { setPrograms((ps) => ps.filter((p) => !(["p1", "p2", "p3"].includes(p.id) && !p.startedAt && !p.completedAt))); }, []);
 
@@ -1936,19 +1952,19 @@ export default function App() {
 
   const finishSession = (session, updatedDays, readiness) => { setPrograms((ps) => ps.map((p) => p.id === session.programId ? { ...p, days: updatedDays, lastReadiness: readiness } : p)); setHistory((h) => [...h, session]); };
   const reorderSchedule = (id, scheduleDays) => setPrograms((ps) => ps.map((p) => p.id === id ? { ...p, scheduleDays } : p));
-  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setProfile({ onboarded: false }); setTab("today"); };
+  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setProfile({ onboarded: false }); setTab("today"); setSettingsOpen(false); };
 
   const pillar = PILLARS.find((p) => p.id === tab);
   const navId = TAB_PARENT[tab] ?? tab;
+  const openSettings = () => setSettingsOpen(true);
   return (
     <div className="app-shell" style={{ background: C.page, display: "flex", justifyContent: "center", fontFamily: SANS }}>
       <div style={{ width: "100%", maxWidth: 430, background: C.page, display: "flex", flexDirection: "column", height: "100%" }}>
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
           {pillar?.locked && <LockedScreen label={pillar.label} Icon={pillar.Icon} blurb={pillar.blurb} />}
-          {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} go={setTab} />}
+          {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} go={setTab} onSettings={openSettings} />}
           {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} onReorderSchedule={reorderSchedule} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
           {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} go={setTab} />}
-          {tab === "profile" && <Profile profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} go={setTab} />}
         </div>
         <div style={{ flexShrink: 0, background: "rgba(22,24,38,0.92)", backdropFilter: "blur(12px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "8px 8px max(22px, env(safe-area-inset-bottom))" }}>
           {PILLARS.map((p) => { const on = navId === p.id, Icon = p.Icon; return (
@@ -1961,6 +1977,7 @@ export default function App() {
             </button>); })}
         </div>
       </div>
+      {settingsOpen && <SettingsSheet profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} equipment={equipment} setEquipment={setEquipment} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
