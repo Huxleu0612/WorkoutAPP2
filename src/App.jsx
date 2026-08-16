@@ -19,7 +19,7 @@ import {
   RocketIcon as Rocket, CubeIcon as Boxes, PersonSimpleIcon as PersonStanding,
   GridNineIcon as Grid3x3, HexagonIcon as Hexagon, MedalIcon as Medal,
   BookOpenIcon as BookOpen, WalletIcon as Wallet, LockSimpleIcon as LockSimple,
-  CheckCircleIcon as CheckCircle, CircleDashedIcon as CircleDashed, CaretDownIcon as CaretDown,
+  CheckCircleIcon as CheckCircle, CircleIcon as Circle, CircleDashedIcon as CircleDashed, CaretDownIcon as CaretDown,
   CaretUpIcon as CaretUp, DotsThreeIcon as DotsThree,
 } from "@phosphor-icons/react";
 import EXERCISES_DATA from "./data/exercises.json";
@@ -83,6 +83,7 @@ const sameDay = (a, b) => ymd(a) === ymd(b);
 const WD_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const WD_LETTER = ["S", "M", "T", "W", "T", "F", "S"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MON_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const ageFrom = (iso) => { if (!iso) return "—"; const b = new Date(iso); const t = new Date(); let a = t.getFullYear() - b.getFullYear(); const m = t.getMonth() - b.getMonth(); if (m < 0 || (m === 0 && t.getDate() < b.getDate())) a--; return a; };
 const fmtDate = (iso) => { if (!iso) return "—"; const d = new Date(iso); return `${d.getDate()} ${MON[d.getMonth()]} ${d.getFullYear()}`; };
 const DEFAULT_DAYS = { 1: [1], 2: [1, 4], 3: [1, 3, 5], 4: [1, 2, 4, 6], 5: [1, 2, 3, 4, 5], 6: [1, 2, 3, 4, 5, 6], 7: [0, 1, 2, 3, 4, 5, 6] };
@@ -166,6 +167,39 @@ const weeklyVolume = (sessions, weeks = 8) => {
   });
 };
 const kFmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
+
+/* ===== habits =====
+   A habit only counts on days it actually existed, so adding one today does not
+   retroactively make last month look like it was missed. */
+const habitsOn = (habits, key) => (Array.isArray(habits) ? habits : []).filter((h) => ymd(new Date(h.createdAt)) <= key && (!h.archivedAt || key < ymd(new Date(h.archivedAt))));
+const habitDayPct = (habits, key) => { const on = habitsOn(habits, key); if (!on.length) return null; return Math.round((on.filter((h) => h.ticks?.[key]).length / on.length) * 100); };
+// today only breaks a streak once the day is over, so an untouched morning doesn't read as a loss
+const habitStreak = (h) => { let n = 0, d = startOfDay(new Date()); if (!h.ticks?.[ymd(d)]) d = addDays(d, -1); while (h.ticks?.[ymd(d)]) { n++; d = addDays(d, -1); } return n; };
+const habitBestRun = (habits, days = 180) => {
+  let best = 0, run = 0;
+  for (let i = days; i >= 0; i--) {
+    const p = habitDayPct(habits, ymd(addDays(startOfDay(new Date()), -i)));
+    if (p === 100) { run++; best = Math.max(best, run); } else if (p != null) run = 0;
+  }
+  return best;
+};
+const habitMonthStats = (habits, monthDate) => {
+  const m = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+  const nx = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+  const today0 = startOfDay(new Date());
+  let hit = 0, total = 0, perfect = 0, missed = 0;
+  for (let d = new Date(m); d < nx && d <= today0; d = addDays(d, 1)) {
+    const k = ymd(d), on = habitsOn(habits, k);
+    if (!on.length) continue;
+    const done = on.filter((h) => h.ticks?.[k]).length;
+    hit += done; total += on.length;
+    if (done === on.length) perfect++;
+    if (done === 0) missed++;
+  }
+  return { pct: total ? Math.round((hit / total) * 100) : null, perfect, missed };
+};
+// same thresholds the Today week tracker uses
+const heatColor = (pct) => (pct == null || pct === 0 ? NEU.n900 : pct >= 90 ? AC.base : pct >= 50 ? AC.a700 : AC.a800);
 const nextDayIndex = (h, p) => { if (!p || !p.days.length) return 0; return sessionsFor(h, p.id).length % p.days.length; };
 const lastWeight = (wl) => { const ks = Object.keys(wl).sort(); return ks.length ? wl[ks[ks.length - 1]] : null; };
 
@@ -595,7 +629,7 @@ function StatsView({ sessions, unit, title, sub, onBack }) {
 /* ================================================================
    DASHBOARD
 ================================================================ */
-function Dashboard({ profile, weightLog, setWeightLog, programs, history, go, onSettings }) {
+function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits, setHabits, go, onSettings }) {
   const [view, setView] = useState("main");
   const [wkOffset, setWkOffset] = useState(0);
   const [selKey, setSelKey] = useState(ymd(new Date()));
@@ -627,16 +661,20 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go, on
     const afterStart = startedAt0 ? startOfDay(dt) >= startedAt0 : false;
     const wDone = scheduled ? !!sessionForWorkout(history, active, dt, aidx) : false;
     const missed = scheduled && past && !wDone && afterStart && !paused;
-    // The week tracker's bar is the share of that day's open items that got closed. Until Habits
-    // ships, a day's items are its scheduled workout (if any) plus the weigh-in.
-    const items = 1 + (scheduled ? 1 : 0);
-    const closed = (weighed ? 1 : 0) + (wDone ? 1 : 0);
+    // The week tracker's bar is the share of that day's open items that got closed: the
+    // scheduled workout, the weigh-in, and every habit that existed on that day.
+    const hOn = habitsOn(habits, key);
+    const items = 1 + (scheduled ? 1 : 0) + hOn.length;
+    const closed = (weighed ? 1 : 0) + (wDone ? 1 : 0) + hOn.filter((h) => h.ticks?.[key]).length;
     const pct = Math.round((closed / items) * 100);
     return { dt, key, dow, aidx, scheduled, done, wDone, weighed, missed, past, pct, isToday: sameDay(dt, new Date()) };
   });
   const now = new Date();
   const todayRow = days.find((d) => d.isToday);
-  const openToday = todayRow ? (todayRow.scheduled && !todayRow.wDone ? 1 : 0) + (todayRow.weighed ? 0 : 1) : (weightLog[todayKey] != null ? 0 : 1);
+  const habitsToday = habitsOn(habits, todayKey);
+  const openHabits = habitsToday.filter((h) => !h.ticks?.[todayKey]);
+  const tickHabit = (id) => setHabits((hs) => hs.map((h) => h.id !== id ? h : { ...h, ticks: { ...h.ticks, [todayKey]: true } }));
+  const openToday = (todayRow ? (todayRow.scheduled && !todayRow.wDone ? 1 : 0) + (todayRow.weighed ? 0 : 1) : (weightLog[todayKey] != null ? 0 : 1)) + openHabits.length;
   const monthCount = (back) => { const m = new Date(now.getFullYear(), now.getMonth() - back, 1), nx = new Date(m.getFullYear(), m.getMonth() + 1, 1); return history.filter((h) => { const d = new Date(h.date); return d >= m && d < nx; }).length; };
   const monthDone = monthCount(0), monthPrev = monthCount(1);
 
@@ -762,6 +800,28 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go, on
           </Card>
         );
       })()}
+
+      {/* OPEN ITEMS — habit chips tick in place, no trip to the Habits tab */}
+      {habitsToday.length > 0 && (
+        <Card style={{ padding: 16, marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: openHabits.length ? 11 : 0 }}>
+            <button onClick={() => go("habits")} style={{ display: "flex", alignItems: "center", gap: 9, flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+              <Target size={17} color={openHabits.length ? ACC : C.green} />
+              <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>{openHabits.length ? `${openHabits.length} habit${openHabits.length === 1 ? "" : "s"} left` : "All habits done today"}</span>
+            </button>
+            {openHabits.length > 0 && <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, flexShrink: 0 }}>Tap to tick</span>}
+          </div>
+          {openHabits.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {openHabits.map((h) => (
+                <button key={h.id} onClick={() => tickHabit(h.id)} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 11px", borderRadius: 99, border: "none", background: NEU.n900, color: C.ink, fontFamily: SANS, fontSize: 11.5, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                  <Circle size={13} color={NEU.n600} /> {h.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* PROGRAM PROGRESS */}
       {active && (
@@ -2007,6 +2067,197 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
    APP SHELL
 ================================================================ */
 /* ================================================================
+   HABITS
+================================================================ */
+const HEAT_LEGEND = [NEU.n900, AC.a800, AC.a700, AC.base];
+
+function HeatGrid({ habits, weeks, onCellTap }) {
+  const end = startOfDay(new Date());
+  const start = addDays(mondayOf(end), -(weeks - 1) * 7);
+  const cells = Array.from({ length: weeks * 7 }).map((_, i) => {
+    const dt = addDays(start, i), key = ymd(dt);
+    return { key, dt, future: dt > end, pct: dt > end ? null : habitDayPct(habits, key), isToday: sameDay(dt, end) };
+  });
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 5 }}>
+      {cells.map((c) => (
+        <div key={c.key} onClick={onCellTap} style={{ aspectRatio: "1", borderRadius: 3, background: c.future ? "transparent" : heatColor(c.pct), border: c.future ? `1px solid ${NEU.n900}` : "none", outline: c.isToday ? `1px solid ${AC.a300}` : "none", outlineOffset: 1, cursor: onCellTap ? "pointer" : "default" }} />
+      ))}
+    </div>
+  );
+}
+
+const HeatLegend = () => (
+  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+    <span style={{ fontFamily: SANS, fontSize: 10, color: NEU.n600 }}>0</span>
+    {HEAT_LEGEND.map((c) => <div key={c} style={{ width: 11, height: 11, borderRadius: 3, background: c }} />)}
+    <span style={{ fontFamily: SANS, fontSize: 10, color: NEU.n600 }}>100%</span>
+  </div>
+);
+
+function HabitSheet({ habit, onSave, onDelete, onClose }) {
+  const [name, setName] = useState(habit.name || "");
+  const [detail, setDetail] = useState(habit.detail || "");
+  const [confirmDel, setConfirmDel] = useState(false);
+  const field = { width: "100%", background: C.page, border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 13px", fontFamily: SANS, fontSize: 15, color: C.ink, outline: "none" };
+  const btn = { flex: 1, height: 44, borderRadius: 8, background: "none", cursor: "pointer", fontFamily: SANS, fontSize: 14.5, fontWeight: 500, WebkitTapHighlightColor: "transparent" };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: C.scrim, zIndex: 60, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "14px 14px 0 0", boxShadow: C.shadowLg, padding: "18px 17px 26px", maxHeight: "86vh", overflowY: "auto" }}>
+        <div style={{ width: 36, height: 3, borderRadius: 2, background: C.line, margin: "0 auto 18px" }} />
+        <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, marginBottom: 6 }}>Habit</div>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Habit name" style={{ ...field, fontSize: 17, marginBottom: 14 }} />
+        <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, marginBottom: 6 }}>Details</div>
+        <textarea value={detail} onChange={(e) => setDetail(e.target.value)} rows={3} placeholder="What does doing this actually look like?" style={{ ...field, resize: "none", lineHeight: 1.5, marginBottom: 16 }} />
+        {habit.id && (confirmDel ? (
+          <div style={{ background: C.redBg, borderRadius: 8, padding: 13, marginBottom: 16 }}>
+            <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink, lineHeight: 1.5, marginBottom: 10 }}>Delete this habit and its history? This cannot be undone.</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setConfirmDel(false)} style={{ ...btn, height: 38, border: `1px solid ${C.line}`, color: C.sub }}>Keep it</button>
+              <button onClick={onDelete} style={{ ...btn, height: 38, border: `1px solid ${C.red}`, color: C.red }}>Delete</button>
+            </div>
+          </div>
+        ) : (
+          <button onClick={() => setConfirmDel(true)} style={{ display: "flex", alignItems: "center", gap: 7, background: "none", border: "none", cursor: "pointer", padding: "0 0 16px", fontFamily: SANS, fontSize: 13.5, color: C.red, WebkitTapHighlightColor: "transparent" }}><Trash2 size={15} /> Delete habit</button>
+        ))}
+        <div style={{ display: "flex", gap: 9 }}>
+          <button onClick={onClose} style={{ ...btn, border: `1px solid ${C.line}`, color: C.sub }}>Cancel</button>
+          <button onClick={() => name.trim() && onSave({ name: name.trim(), detail: detail.trim() })} style={{ ...btn, border: `1px solid ${name.trim() ? AC.base : C.line}`, color: name.trim() ? ACC : C.faint }}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MonthHistorySheet({ habits, onClose }) {
+  const [back, setBack] = useState(0);
+  const now = new Date();
+  const m = new Date(now.getFullYear(), now.getMonth() - back, 1);
+  const stats = habitMonthStats(habits, m);
+  const prev = habitMonthStats(habits, new Date(m.getFullYear(), m.getMonth() - 1, 1));
+  const first = new Date(m.getFullYear(), m.getMonth(), 1);
+  const lead = (first.getDay() + 6) % 7; // grid starts Monday
+  const dim = new Date(m.getFullYear(), m.getMonth() + 1, 0).getDate();
+  const today0 = startOfDay(now);
+  const tile = { flex: 1, background: C.page, borderRadius: 8, padding: "11px 12px" };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: C.scrim, zIndex: 60, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "14px 14px 0 0", boxShadow: C.shadowLg, padding: "18px 17px 26px", maxHeight: "86vh", overflowY: "auto" }}>
+        <div style={{ width: 36, height: 3, borderRadius: 2, background: C.line, margin: "0 auto 18px" }} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          <button onClick={() => setBack(back + 1)} style={miniRound} aria-label="Previous month"><ChevronLeft size={17} /></button>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontFamily: SANS, fontSize: 18, fontWeight: 500, color: C.ink, letterSpacing: -0.3 }}>{MON_LONG[m.getMonth()]} {m.getFullYear()}</div>
+            <div style={{ fontFamily: SANS, fontSize: 12.5, color: stats.pct == null ? NEU.n600 : AC.a300, marginTop: 2 }}>{stats.pct == null ? "Nothing tracked yet" : `${stats.pct}% of habits hit`}</div>
+          </div>
+          <button onClick={() => setBack(Math.max(0, back - 1))} style={miniRound} aria-label="Next month"><ChevronRight size={17} color={back > 0 ? C.ink : C.faint} /></button>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 8px" }}><HeatLegend /></div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 5, marginBottom: 16 }}>
+          {Array.from({ length: lead }).map((_, i) => <div key={`l${i}`} />)}
+          {Array.from({ length: dim }).map((_, i) => {
+            const dt = new Date(m.getFullYear(), m.getMonth(), i + 1), key = ymd(dt), future = startOfDay(dt) > today0;
+            return <div key={key} style={{ aspectRatio: "1", borderRadius: 3, background: future ? "transparent" : heatColor(habitDayPct(habits, key)), border: future ? `1px solid ${NEU.n900}` : "none", outline: sameDay(dt, now) ? `1px solid ${AC.a300}` : "none", outlineOffset: 1 }} />;
+          })}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {[{ k: "Best run", v: `${habitBestRun(habits)}d` }, { k: "Perfect days", v: String(stats.perfect) }, { k: "Missed", v: String(stats.missed) }].map((t) => (
+            <div key={t.k} style={tile}>
+              <div style={{ fontFamily: SANS, fontSize: 9, fontWeight: 500, letterSpacing: 1.1, textTransform: "uppercase", color: NEU.n600, whiteSpace: "nowrap" }}>{t.k}</div>
+              <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, marginTop: 5, fontVariantNumeric: "tabular-nums" }}>{t.v}</div>
+            </div>
+          ))}
+        </div>
+        {prev.pct != null && stats.pct != null && <div style={{ fontFamily: SANS, fontSize: 12.5, color: NEU.n600, marginTop: 14, textAlign: "center" }}>Last month was {prev.pct}%.</div>}
+      </div>
+    </div>
+  );
+}
+
+function Habits({ habits, setHabits }) {
+  const [sheet, setSheet] = useState(null); // {habit} | "month"
+  const todayKey = ymd(new Date());
+  const active = habitsOn(habits, todayKey);
+  const doneToday = active.filter((h) => h.ticks?.[todayKey]).length;
+  const toggle = (id) => setHabits((hs) => hs.map((h) => h.id !== id ? h : { ...h, ticks: { ...h.ticks, [todayKey]: !h.ticks?.[todayKey] } }));
+  const save = (id, patch) => setHabits((hs) => id ? hs.map((h) => h.id === id ? { ...h, ...patch } : h) : [...hs, { id: `hb_${Date.now()}`, createdAt: new Date().toISOString(), ticks: {}, visibleToFriends: false, ...patch }]);
+  const remove = (id) => setHabits((hs) => hs.filter((h) => h.id !== id));
+
+  const thisMonth = habitMonthStats(habits, new Date());
+  const lastMonth = habitMonthStats(habits, new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1));
+  const ahead = thisMonth.pct != null && lastMonth.pct != null ? thisMonth.pct - lastMonth.pct : null;
+
+  return (
+    <div style={{ padding: "6px 17px 24px" }}>
+      <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>
+        {active.length ? `${doneToday} of ${active.length} done today` : "Nothing tracked yet"}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, margin: "8px 0 20px" }}>
+        <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.54 }}>Habits</h1>
+        <button onClick={() => setSheet({ habit: {} })} aria-label="New habit" style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 16, border: `1px solid ${AC.base}`, background: "none", color: ACC, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}><Plus size={17} /></button>
+      </div>
+
+      {active.length === 0 ? (
+        <Card style={{ padding: 26, textAlign: "center", marginBottom: 16 }}>
+          <div style={{ fontFamily: SANS, fontSize: 17, fontWeight: 500, color: C.ink, letterSpacing: -0.2 }}>No habits yet</div>
+          <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, margin: "7px 0 16px", lineHeight: 1.55 }}>Add the few things you want to do most days. Two or three is plenty to start.</div>
+          <button onClick={() => setSheet({ habit: {} })} style={{ height: 40, padding: "0 18px", borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Add a habit</button>
+        </Card>
+      ) : (
+        <Card style={{ padding: "4px 15px", marginBottom: 18 }}>
+          {active.map((h, i) => {
+            const on = !!h.ticks?.[todayKey], streak = habitStreak(h);
+            return (
+              <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 0", borderBottom: i === active.length - 1 ? "none" : `1px solid ${C.lineSoft}` }}>
+                <button onClick={() => toggle(h.id)} aria-label={`Tick ${h.name}`} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", flexShrink: 0, WebkitTapHighlightColor: "transparent" }}>
+                  {on ? <CheckCircle size={24} weight="fill" color={ACC} /> : <Circle size={24} color={NEU.n700} />}
+                </button>
+                <button onClick={() => setSheet({ habit: h })} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: 0, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                  <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: on ? NEU.n400 : C.ink, textDecoration: on ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.name}</div>
+                  {h.detail && <div style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.detail}</div>}
+                </button>
+                <span style={{ fontFamily: SANS, fontSize: 12.5, color: streak > 0 ? AC.a300 : NEU.n600, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{streak > 0 ? `${streak}d` : "—"}</span>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      {habits.length > 0 && (<>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "0 2px 8px" }}>
+          <Eyebrow>Last 3 weeks</Eyebrow><HeatLegend />
+        </div>
+        <Card style={{ padding: 14 }}>
+          <HeatGrid habits={habits} weeks={3} onCellTap={() => setSheet("month")} />
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}` }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 500, color: ahead == null ? C.sub : ahead >= 0 ? AC.a300 : C.sub }}>
+                {ahead == null ? "Building a picture" : ahead >= 0 ? "Ahead of last month" : "Behind last month"}
+              </div>
+              <div style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, marginTop: 3 }}>
+                {thisMonth.pct == null ? "Tick a few days to compare." : `${thisMonth.pct}% of habits hit${lastMonth.pct != null ? ` · was ${lastMonth.pct}%` : ""}`}
+              </div>
+            </div>
+            <div style={{ textAlign: "right", flexShrink: 0 }}>
+              <div style={{ fontFamily: SANS, fontSize: 9, fontWeight: 500, letterSpacing: 1.1, textTransform: "uppercase", color: NEU.n600 }}>Best run</div>
+              <div style={{ fontFamily: SANS, fontSize: 18, fontWeight: 500, color: C.ink, marginTop: 3, fontVariantNumeric: "tabular-nums" }}>{habitBestRun(habits)}d</div>
+            </div>
+          </div>
+        </Card>
+      </>)}
+
+      {sheet === "month" && <MonthHistorySheet habits={habits} onClose={() => setSheet(null)} />}
+      {sheet && sheet !== "month" && (
+        <HabitSheet habit={sheet.habit}
+          onSave={(patch) => { save(sheet.habit.id, patch); setSheet(null); }}
+          onDelete={() => { remove(sheet.habit.id); setSheet(null); }}
+          onClose={() => setSheet(null)} />
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
    PILLARS — the five lifestyle modules. Train ships first; the rest are
    visible but locked. Adding one later is a `locked: false` flip plus a
    render line, not a shell rewrite.
@@ -2015,7 +2266,7 @@ const PILLARS = [
   { id: "today", label: "Today", Icon: Home },
   { id: "train", label: "Train", Icon: Dumbbell },
   { id: "read", label: "Read", Icon: BookOpen, locked: true, blurb: "Your reading list, daily minutes and highlights will live here." },
-  { id: "habits", label: "Habits", Icon: Target, locked: true, blurb: "Daily habits and the streaks you build on them will live here." },
+  { id: "habits", label: "Habits", Icon: Target },
   { id: "finance", label: "Finance", Icon: Wallet, locked: true, blurb: "Budgets, savings and your mortgage will live here." },
 ];
 // screens reachable by `go()` but with no tab of their own — they light up their parent pillar
@@ -2043,6 +2294,7 @@ export default function App() {
   const [draft, setDraft] = usePersist("wa_draft", null);
   const [maxes, setMaxes] = usePersist("wa_maxes", {});
   const [equipment, setEquipment] = usePersist("wa_equipment", DEFAULT_EQUIPMENT);
+  const [habits, setHabits] = usePersist("wa_habits", []);
   const [tab, setTab] = useState("today");
   const [settingsOpen, setSettingsOpen] = useState(false);
   // one-time cleanup: drop the old auto-seeded p1/p2/p3 defaults if they were never actually started
@@ -2052,7 +2304,7 @@ export default function App() {
 
   const finishSession = (session, updatedDays, readiness) => { setPrograms((ps) => ps.map((p) => p.id === session.programId ? { ...p, days: updatedDays, lastReadiness: readiness } : p)); setHistory((h) => [...h, session]); };
   const reorderSchedule = (id, scheduleDays) => setPrograms((ps) => ps.map((p) => p.id === id ? { ...p, scheduleDays } : p));
-  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setProfile({ onboarded: false }); setTab("today"); setSettingsOpen(false); };
+  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment", "wa_habits"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setHabits([]); setProfile({ onboarded: false }); setTab("today"); setSettingsOpen(false); };
 
   const pillar = PILLARS.find((p) => p.id === tab);
   const navId = TAB_PARENT[tab] ?? tab;
@@ -2062,8 +2314,9 @@ export default function App() {
       <div style={{ width: "100%", maxWidth: 430, background: C.page, display: "flex", flexDirection: "column", height: "100%" }}>
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
           {pillar?.locked && <LockedScreen label={pillar.label} Icon={pillar.Icon} blurb={pillar.blurb} />}
-          {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} go={setTab} onSettings={openSettings} />}
+          {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} habits={habits} setHabits={setHabits} go={setTab} onSettings={openSettings} />}
           {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} onReorderSchedule={reorderSchedule} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
+          {tab === "habits" && <Habits habits={habits} setHabits={setHabits} />}
           {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} go={setTab} />}
         </div>
         <div style={{ flexShrink: 0, background: "rgba(22,24,38,0.92)", backdropFilter: "blur(12px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "8px 8px max(22px, env(safe-area-inset-bottom))" }}>
