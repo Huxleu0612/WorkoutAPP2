@@ -139,6 +139,31 @@ const effWeeks = (p) => effMs(p) / (7 * DAYMS);
 const programWeek = (p) => Math.min(p?.weeks || 12, Math.floor(effWeeks(p)) + 1);
 const durStr = (p) => { const d = Math.floor(effMs(p) / DAYMS); const w = Math.floor(d / 7), rd = d % 7; if (d < 7) return `${d} day${d !== 1 ? "s" : ""}`; return `${w} week${w !== 1 ? "s" : ""}${rd ? ` ${rd}d` : ""}`; };
 const sessionsFor = (h, pid) => h.filter((x) => x.programId === pid);
+// one source of truth for "how much work is in these sessions" — shared by StatsView and Train
+const volumeAndSets = (sessions) => {
+  const allSets = sessions.flatMap((s) => s.sets || []);
+  return { allSets, workouts: sessions.length, sets: allSets.length, volumeKg: allSets.reduce((n, x) => n + (x.w || 0) * (x.reps || 0), 0) };
+};
+// consecutive weeks with at least one logged session. The current week only breaks the streak
+// once it is over, so a fresh Monday doesn't read as having lost it.
+const weekStreak = (sessions) => {
+  if (!sessions.length) return 0;
+  const weeks = new Set(sessions.map((s) => ymd(mondayOf(new Date(s.date)))));
+  let cursor = mondayOf(new Date());
+  if (!weeks.has(ymd(cursor))) cursor = addDays(cursor, -7);
+  let n = 0;
+  while (weeks.has(ymd(cursor))) { n++; cursor = addDays(cursor, -7); }
+  return n;
+};
+const weeklyVolume = (sessions, weeks = 8) => {
+  const thisMon = mondayOf(new Date());
+  return Array.from({ length: weeks }).map((_, i) => {
+    const m = addDays(thisMon, -(weeks - 1 - i) * 7), nx = addDays(m, 7);
+    const inWeek = sessions.filter((s) => { const d = startOfDay(new Date(s.date)); return d >= m && d < nx; });
+    return { label: `${m.getDate()} ${MON[m.getMonth()]}`, kg: volumeAndSets(inWeek).volumeKg };
+  });
+};
+const kFmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
 const nextDayIndex = (h, p) => { if (!p || !p.days.length) return 0; return sessionsFor(h, p.id).length % p.days.length; };
 const lastWeight = (wl) => { const ks = Object.keys(wl).sort(); return ks.length ? wl[ks[ks.length - 1]] : null; };
 
@@ -533,9 +558,7 @@ function Onboarding({ onDone }) {
    STATS VIEW
 ================================================================ */
 function StatsView({ sessions, unit, title, sub, onBack }) {
-  const allSets = sessions.flatMap((s) => s.sets || []);
-  const workouts = sessions.length, sets = allSets.length;
-  const volumeKg = allSets.reduce((n, x) => n + (x.w || 0) * (x.reps || 0), 0);
+  const { allSets, workouts, sets, volumeKg } = volumeAndSets(sessions);
   const byEx = {};
   sessions.slice().sort((a, b) => a.date.localeCompare(b.date)).forEach((s) => (s.sets || []).forEach((x) => { if (x.w == null) return; if (!byEx[x.exId]) byEx[x.exId] = { start: x.w, max: x.w }; byEx[x.exId].max = Math.max(byEx[x.exId].max, x.w); }));
   const lifts = Object.entries(byEx).map(([id, v]) => ({ id, ...v, delta: v.max - v.start })).filter((l) => l.max > 0).sort((a, b) => b.delta - a.delta);
@@ -875,29 +898,94 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
     const nextRow = week.find((d) => d.aidx != null && !d.done && !d.past) || week.find((d) => d.aidx != null && !d.done);
 
     return (
-      <div style={{ padding: "14px 18px 24px" }}>
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, fontWeight: 500 }}>{active.name} · week {programWeek(active)}</div>
-          <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 720, color: C.ink, margin: "2px 0 0", letterSpacing: -0.6 }}>This week</h1>
-        </div>
+      <div style={{ padding: "6px 17px 24px" }}>
+        <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>{active.name} · Week {programWeek(active)} of {active.weeks}</div>
+        <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: "8px 0 20px", letterSpacing: -0.54 }}>Train</h1>
 
         {live ? (
-          <div style={{ border: `1px solid ${C.onDarkLine}`, background: `linear-gradient(150deg, ${C.graphite2}, ${C.graphite})`, borderRadius: 16, padding: 20, marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <div><div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.2, color: C.amber, fontWeight: 600 }}>IN PROGRESS</div><div style={{ fontFamily: SANS, fontSize: 23, fontWeight: 700, color: C.onDark, marginTop: 5 }}>{wLabel(live.dayIdx)}</div><div style={{ fontFamily: MONO, fontSize: 11, color: C.onDarkSub, marginTop: 4 }}>{Object.keys(live.done).length} SETS LOGGED</div></div>
-            <button onClick={() => setPhase("active")} style={{ height: 48, padding: "0 22px", borderRadius: 24, border: "none", background: ACC, color: C.page, fontFamily: SANS, fontSize: 15, fontWeight: 650, cursor: "pointer", display: "flex", alignItems: "center", gap: 7, WebkitTapHighlightColor: "transparent" }}><Play size={16} /> Resume</button>
-          </div>
+          <button onClick={() => setPhase("active")} style={{ position: "relative", display: "block", width: "100%", textAlign: "left", overflow: "hidden", cursor: "pointer", background: C.card, borderRadius: 14, border: `1px solid ${C.line}`, padding: "16px 16px 16px 20px", marginBottom: 18, WebkitTapHighlightColor: "transparent" }}>
+            <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 2, background: C.amber }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: SANS, fontSize: 11, fontWeight: 500, color: C.amber }}>In progress</div>
+                <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, margin: "4px 0 6px", letterSpacing: -0.3 }}>{wLabel(live.dayIdx)}</div>
+                <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub }}>{Object.keys(live.done).length} sets logged · tap to carry on</div>
+              </div>
+              <div style={{ width: 46, height: 46, flexShrink: 0, borderRadius: 8, border: `1px solid ${C.amber}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Play size={18} weight="fill" color={C.amber} /></div>
+            </div>
+          </button>
         ) : nextRow ? (
-          <div style={{ border: `1px solid ${C.onDarkLine}`, background: `linear-gradient(150deg, ${C.graphite2}, ${C.graphite})`, borderRadius: 16, padding: 20, marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <div><div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.2, color: ACC, fontWeight: 600 }}>{nextRow.isToday ? "TODAY'S WORKOUT" : "NEXT WORKOUT"}</div><div style={{ fontFamily: SANS, fontSize: 23, fontWeight: 700, color: C.onDark, marginTop: 5 }}>{wLabel(nextRow.aidx)}</div></div>
-            <button onClick={() => startWorkout(nextRow.aidx)} style={{ height: 48, padding: "0 22px", borderRadius: 24, border: "none", background: ACC, color: C.page, fontFamily: SANS, fontSize: 15, fontWeight: 650, cursor: "pointer", display: "flex", alignItems: "center", gap: 7, WebkitTapHighlightColor: "transparent" }}><Play size={16} /> Get started</button>
-          </div>
+          <button onClick={() => startWorkout(nextRow.aidx)} style={{ position: "relative", display: "block", width: "100%", textAlign: "left", overflow: "hidden", cursor: "pointer", background: C.card, borderRadius: 14, border: `1px solid ${C.line}`, padding: "16px 16px 16px 20px", marginBottom: 18, WebkitTapHighlightColor: "transparent" }}>
+            <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 2, background: AC.base }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: SANS, fontSize: 11, fontWeight: 500, color: AC.a300 }}>Next session · {nextRow.isToday ? "Today" : WD_LONG[nextRow.dow]}</div>
+                <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, margin: "4px 0 6px", letterSpacing: -0.3 }}>{wLabel(nextRow.aidx)}</div>
+                <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{(active.days[nextRow.aidx]?.ex || []).map((e) => exName(e.id)).join(" · ")}</div>
+              </div>
+              <div style={{ width: 46, height: 46, flexShrink: 0, borderRadius: 8, border: `1px solid ${AC.base}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Play size={18} weight="fill" color={ACC} /></div>
+            </div>
+          </button>
         ) : (
-          <div style={{ border: `1px solid ${C.line}`, background: C.card, borderRadius: 16, padding: 22, marginBottom: 20, textAlign: "center" }}>
-            <div style={{ width: 46, height: 46, borderRadius: 23, background: C.greenBg, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 10px" }}><Check size={24} color={C.green} strokeWidth={3} /></div>
-            <div style={{ fontFamily: SANS, fontSize: 17, fontWeight: 700, color: C.ink }}>All caught up this week</div>
-            <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, marginTop: 4 }}>Every scheduled workout is done. Nice.</div>
-          </div>
+          <Card style={{ padding: 22, marginBottom: 18, textAlign: "center" }}>
+            <div style={{ width: 46, height: 46, borderRadius: 23, background: C.greenBg, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 10px" }}><Check size={24} color={C.green} /></div>
+            <div style={{ fontFamily: SANS, fontSize: 17, fontWeight: 500, color: C.ink, letterSpacing: -0.2 }}>All caught up this week</div>
+            <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, marginTop: 5 }}>Every scheduled workout is done.</div>
+          </Card>
         )}
+
+        {/* STATS */}
+        {(() => {
+          const mine = sessionsFor(history, active.id);
+          const { volumeKg } = volumeAndSets(mine);
+          const doneThisWeek = week.filter((d) => d.done).length;
+          const dueThisWeek = week.filter((d) => d.aidx != null).length;
+          const stats = [
+            { k: "Volume", v: kFmt(fmtW(volumeKg, u)), u: u },
+            { k: "Sessions", v: `${doneThisWeek}/${dueThisWeek}`, u: "this wk" },
+            { k: "Streak", v: String(weekStreak(mine)), u: "wk", acc: true },
+          ];
+          return (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 18 }}>
+              {stats.map((s) => (
+                <Card key={s.k} style={{ padding: "13px 12px" }}>
+                  <div style={{ fontFamily: SANS, fontSize: 9, fontWeight: 500, letterSpacing: 1.1, textTransform: "uppercase", color: NEU.n600, whiteSpace: "nowrap" }}>{s.k}</div>
+                  <div style={{ marginTop: 6, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                    <span style={{ fontFamily: SANS, fontSize: 21, fontWeight: 500, color: s.acc ? AC.a300 : C.ink, letterSpacing: -0.3 }}>{s.v}</span>
+                    <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600 }}> {s.u}</span>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          );
+        })()}
+
+        {/* TOTAL VOLUME */}
+        {(() => {
+          const series = weeklyVolume(sessionsFor(history, active.id));
+          const data = series.map((p) => ({ x: p.label, v: +fmtW(p.kg, u).toFixed(1) }));
+          const nonZero = series.filter((p) => p.kg > 0);
+          if (nonZero.length < 2) return null;
+          const first = nonZero[0].kg, last = nonZero[nonZero.length - 1].kg;
+          const pctChange = first > 0 ? Math.round(((last - first) / first) * 100) : null;
+          return (
+            <>
+              <SectionLabel>Total volume</SectionLabel>
+              <Card style={{ padding: "14px 12px 10px", marginBottom: 18 }}>
+                <ResponsiveContainer width="100%" height={60}>
+                  <LineChart data={data} margin={{ top: 4, right: 6, left: 6, bottom: 0 }}>
+                    <Tooltip contentStyle={{ fontFamily: MONO, fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.sub }} formatter={(v) => [`${commas(v)} ${u}`, "Volume"]} />
+                    <Line type="monotone" dataKey="v" stroke={AC.base} strokeWidth={1.5} strokeLinecap="round" dot={false} activeDot={{ r: 3, fill: AC.base }} isAnimationActive={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 4px 0" }}>
+                  <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, fontVariantNumeric: "tabular-nums" }}>{kFmt(fmtW(first, u))} {u}</span>
+                  <span style={{ fontFamily: SANS, fontSize: 11, color: AC.a300, fontVariantNumeric: "tabular-nums" }}>{kFmt(fmtW(last, u))} {u}{pctChange != null ? ` · ${pctChange >= 0 ? "+" : ""}${pctChange}%` : ""}</span>
+                </div>
+              </Card>
+            </>
+          );
+        })()}
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <SectionLabel>This week's schedule</SectionLabel>
@@ -928,7 +1016,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
                         )}
                       </div>
                       {isWorkout && !d.done && (
-                        <button onClick={() => (d.inProgress ? setPhase("active") : startWorkout(d.aidx))} onPointerDown={(e) => e.stopPropagation()} style={{ height: 40, padding: "0 16px", borderRadius: 20, border: "none", background: d.inProgress ? C.amber : missed ? C.amber : ACC, color: C.page, fontFamily: SANS, fontSize: 14, fontWeight: 650, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Play size={14} /> {d.inProgress ? "Resume" : "Start"}</button>
+                        <button onClick={() => (d.inProgress ? setPhase("active") : startWorkout(d.aidx))} onPointerDown={(e) => e.stopPropagation()} style={{ height: 40, padding: "0 15px", borderRadius: 8, border: `1px solid ${d.inProgress || missed ? C.amber : AC.base}`, background: "none", color: d.inProgress || missed ? C.amber : ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Play size={14} weight="fill" /> {d.inProgress ? "Resume" : "Start"}</button>
                       )}
                       {!isWorkout && (
                         <button onClick={() => setPhase("pick")} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, color: ACC, fontFamily: SANS, fontSize: 13.5, fontWeight: 600, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Plus size={16} strokeWidth={2.5} /> Add</button>
@@ -959,7 +1047,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
     const todayAi = assignedIdx(active, new Date());
     return (
       <div style={{ padding: "6px 18px 24px" }}>
-        <button onClick={() => setPhase("schedule")} style={backBtn}><ChevronLeft size={20} /> This week</button>
+        <button onClick={() => setPhase("schedule")} style={backBtn}><ChevronLeft size={20} /> Train</button>
         <PageTitle sub={`${active.name} · week ${programWeek(active)}`}>Pick a workout</PageTitle>
         <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, marginTop: -12, marginBottom: 16, lineHeight: 1.45 }}>Choose which session to train.</div>
         <div style={{ display: "grid", gap: 10 }}>
@@ -1025,7 +1113,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
   /* ================= ACTIVE ================= */
   return (
     <div style={{ padding: "6px 18px 24px" }}>
-      <button onClick={() => setPhase("schedule")} style={backBtn}><ChevronLeft size={20} /> This week</button>
+      <button onClick={() => setPhase("schedule")} style={backBtn}><ChevronLeft size={20} /> Train</button>
       <PageTitle sub={subLine}>{wLabel(live.dayIdx)}</PageTitle>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: -12, marginBottom: 16 }}>
         <span style={{ fontFamily: MONO, fontSize: 12, color: C.sub }}>{doneCount} / {totalSets} SETS COMPLETE</span>
