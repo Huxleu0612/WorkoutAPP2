@@ -20,7 +20,7 @@ import {
   GridNineIcon as Grid3x3, HexagonIcon as Hexagon, MedalIcon as Medal,
   BookOpenIcon as BookOpen, WalletIcon as Wallet, LockSimpleIcon as LockSimple,
   CheckCircleIcon as CheckCircle, CircleIcon as Circle, CircleDashedIcon as CircleDashed, CaretDownIcon as CaretDown,
-  CaretUpIcon as CaretUp, DotsThreeIcon as DotsThree,
+  CaretUpIcon as CaretUp, DotsThreeIcon as DotsThree, TagIcon as Tag, QuotesIcon as Quotes,
 } from "@phosphor-icons/react";
 import EXERCISES_DATA from "./data/exercises.json";
 import { PROGRAM_CATALOG } from "./data/programCatalog";
@@ -200,6 +200,20 @@ const habitMonthStats = (habits, monthDate) => {
 };
 // same thresholds the Today week tracker uses
 const heatColor = (pct) => (pct == null || pct === 0 ? NEU.n900 : pct >= 90 ? AC.base : pct >= 50 ? AC.a700 : AC.a800);
+
+/* ===== reading ===== */
+const READ_DEFAULT = { goalMin: 20, when: "before bed", log: {}, quotes: [] };
+const readMin = (read, key) => read.log?.[key] || 0;
+const readMet = (read, key) => readMin(read, key) >= (read.goalMin || 20);
+// like habit streaks, today only counts against you once it is over
+const readStreak = (read) => { let n = 0, d = startOfDay(new Date()); if (!readMet(read, ymd(d))) d = addDays(d, -1); while (readMet(read, ymd(d))) { n++; d = addDays(d, -1); } return n; };
+const readWeekTotal = (read) => weekKeysOf(new Date()).reduce((n, k) => n + readMin(read, k), 0);
+const hm = (min) => (min >= 60 ? `${Math.floor(min / 60)}h ${min % 60}m` : `${Math.round(min)}m`);
+const tagCounts = (quotes) => {
+  const m = {};
+  quotes.forEach((q) => { if (q.tag) m[q.tag] = (m[q.tag] || 0) + 1; });
+  return Object.entries(m).map(([tag, n]) => ({ tag, n })).sort((a, b) => b.n - a.n);
+};
 const nextDayIndex = (h, p) => { if (!p || !p.days.length) return 0; return sessionsFor(h, p.id).length % p.days.length; };
 const lastWeight = (wl) => { const ks = Object.keys(wl).sort(); return ks.length ? wl[ks[ks.length - 1]] : null; };
 
@@ -629,7 +643,7 @@ function StatsView({ sessions, unit, title, sub, onBack }) {
 /* ================================================================
    DASHBOARD
 ================================================================ */
-function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits, setHabits, go, onSettings }) {
+function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits, setHabits, read, go, onSettings }) {
   const [view, setView] = useState("main");
   const [wkOffset, setWkOffset] = useState(0);
   const [selKey, setSelKey] = useState(ymd(new Date()));
@@ -662,10 +676,10 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
     const wDone = scheduled ? !!sessionForWorkout(history, active, dt, aidx) : false;
     const missed = scheduled && past && !wDone && afterStart && !paused;
     // The week tracker's bar is the share of that day's open items that got closed: the
-    // scheduled workout, the weigh-in, and every habit that existed on that day.
+    // scheduled workout, the weigh-in, the reading goal, and every habit that existed then.
     const hOn = habitsOn(habits, key);
-    const items = 1 + (scheduled ? 1 : 0) + hOn.length;
-    const closed = (weighed ? 1 : 0) + (wDone ? 1 : 0) + hOn.filter((h) => h.ticks?.[key]).length;
+    const items = 2 + (scheduled ? 1 : 0) + hOn.length;
+    const closed = (weighed ? 1 : 0) + (wDone ? 1 : 0) + (readMet(read, key) ? 1 : 0) + hOn.filter((h) => h.ticks?.[key]).length;
     const pct = Math.round((closed / items) * 100);
     return { dt, key, dow, aidx, scheduled, done, wDone, weighed, missed, past, pct, isToday: sameDay(dt, new Date()) };
   });
@@ -674,7 +688,8 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
   const habitsToday = habitsOn(habits, todayKey);
   const openHabits = habitsToday.filter((h) => !h.ticks?.[todayKey]);
   const tickHabit = (id) => setHabits((hs) => hs.map((h) => h.id !== id ? h : { ...h, ticks: { ...h.ticks, [todayKey]: true } }));
-  const openToday = (todayRow ? (todayRow.scheduled && !todayRow.wDone ? 1 : 0) + (todayRow.weighed ? 0 : 1) : (weightLog[todayKey] != null ? 0 : 1)) + openHabits.length;
+  const readLeft = Math.max(0, (read.goalMin || 20) - readMin(read, todayKey));
+  const openToday = (todayRow ? (todayRow.scheduled && !todayRow.wDone ? 1 : 0) + (todayRow.weighed ? 0 : 1) : (weightLog[todayKey] != null ? 0 : 1)) + openHabits.length + (readLeft > 0 ? 1 : 0);
   const monthCount = (back) => { const m = new Date(now.getFullYear(), now.getMonth() - back, 1), nx = new Date(m.getFullYear(), m.getMonth() + 1, 1); return history.filter((h) => { const d = new Date(h.date); return d >= m && d < nx; }).length; };
   const monthDone = monthCount(0), monthPrev = monthCount(1);
 
@@ -802,15 +817,19 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
       })()}
 
       {/* OPEN ITEMS — habit chips tick in place, no trip to the Habits tab */}
-      {habitsToday.length > 0 && (
+      {(habitsToday.length > 0 || readLeft > 0) && (
         <Card style={{ padding: 16, marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: openHabits.length ? 11 : 0 }}>
+          <button onClick={() => go("read")} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", marginBottom: habitsToday.length ? 12 : 0, paddingBottom: habitsToday.length ? 12 : 0, borderBottom: habitsToday.length ? `1px solid ${C.lineSoft}` : "none", WebkitTapHighlightColor: "transparent" }}>
+            <BookOpen size={17} color={readLeft > 0 ? ACC : C.green} />
+            <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>{readLeft > 0 ? `${readLeft} min of reading left` : "Reading done today"}</span>
+          </button>
+          {habitsToday.length > 0 && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: openHabits.length ? 11 : 0 }}>
             <button onClick={() => go("habits")} style={{ display: "flex", alignItems: "center", gap: 9, flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
               <Target size={17} color={openHabits.length ? ACC : C.green} />
               <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>{openHabits.length ? `${openHabits.length} habit${openHabits.length === 1 ? "" : "s"} left` : "All habits done today"}</span>
             </button>
             {openHabits.length > 0 && <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, flexShrink: 0 }}>Tap to tick</span>}
-          </div>
+          </div>}
           {openHabits.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
               {openHabits.map((h) => (
@@ -2258,6 +2277,157 @@ function Habits({ habits, setHabits }) {
 }
 
 /* ================================================================
+   READ — reading is a habit, quotes are what you keep from it
+================================================================ */
+function Ring({ pct, size = 34, stroke = 2.5 }) {
+  const r = (size - stroke) / 2, c = 2 * Math.PI * r;
+  return (
+    <svg width={size} height={size} style={{ flexShrink: 0 }}>
+      <circle cx={size / 2} cy={size / 2} r={r} stroke={NEU.n800} strokeWidth={stroke} fill="none" />
+      <circle cx={size / 2} cy={size / 2} r={r} stroke={AC.base} strokeWidth={stroke} fill="none" strokeDasharray={c} strokeDashoffset={c * (1 - Math.min(1, pct / 100))} strokeLinecap="round" transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+    </svg>
+  );
+}
+
+function TagSheet({ quotes, current, onPick, onClose }) {
+  const [val, setVal] = useState(current || "");
+  const counts = tagCounts(quotes);
+  const clean = val.trim().replace(/^#/, "").toLowerCase();
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: C.scrim, zIndex: 60, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "14px 14px 0 0", boxShadow: C.shadowLg, padding: "18px 17px 26px", maxHeight: "86vh", overflowY: "auto" }}>
+        <div style={{ width: 36, height: 3, borderRadius: 2, background: C.line, margin: "0 auto 18px" }} />
+        <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, marginBottom: 6 }}>Tag</div>
+        <input value={val} onChange={(e) => setVal(e.target.value)} placeholder="sleep" style={{ width: "100%", background: C.page, border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 13px", fontFamily: SANS, fontSize: 16, color: C.ink, outline: "none", marginBottom: 14 }} />
+        {counts.length > 0 && (<>
+          <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, marginBottom: 8 }}>Already using</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
+            {counts.map(({ tag, n }) => (
+              <button key={tag} onClick={() => onPick(tag)} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 11px", borderRadius: 99, border: "none", background: NEU.n900, color: C.ink, fontFamily: SANS, fontSize: 12, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>#{tag} <span style={{ color: NEU.n600 }}>{n}</span></button>
+            ))}
+          </div>
+        </>)}
+        <div style={{ display: "flex", gap: 9 }}>
+          <button onClick={() => onPick(null)} style={{ flex: 1, height: 44, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 14.5, fontWeight: 500, cursor: "pointer" }}>{current ? "Remove tag" : "Cancel"}</button>
+          <button onClick={() => clean && onPick(clean)} style={{ flex: 1, height: 44, borderRadius: 8, border: `1px solid ${clean ? AC.base : C.line}`, background: "none", color: clean ? ACC : C.faint, fontFamily: SANS, fontSize: 14.5, fontWeight: 500, cursor: "pointer" }}>Use tag</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Read({ read, setRead }) {
+  const [draftQuote, setDraftQuote] = useState("");
+  const [draftSource, setDraftSource] = useState("");
+  const [draftTag, setDraftTag] = useState(null);
+  const [tagOpen, setTagOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const todayKey = ymd(new Date());
+  const goal = read.goalMin || 20;
+  const doneMin = readMin(read, todayKey);
+  const left = Math.max(0, goal - doneMin);
+  const quotes = read.quotes || [];
+
+  const addMin = (n) => setRead((r) => ({ ...r, log: { ...r.log, [todayKey]: Math.max(0, (r.log?.[todayKey] || 0) + n) } }));
+  const logQuote = () => {
+    const text = draftQuote.trim(); if (!text) return;
+    setRead((r) => ({ ...r, quotes: [{ id: `qt_${Date.now()}`, text, tag: draftTag, source: draftSource.trim(), createdAt: new Date().toISOString() }, ...(r.quotes || [])] }));
+    setDraftQuote(""); setDraftSource(""); setDraftTag(null);
+  };
+  const removeQuote = (id) => setRead((r) => ({ ...r, quotes: (r.quotes || []).filter((x) => x.id !== id) }));
+
+  const counts = tagCounts(quotes);
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? quotes.filter((x) => x.text.toLowerCase().includes(needle) || (x.tag || "").includes(needle) || (x.source || "").toLowerCase().includes(needle)) : quotes;
+
+  return (
+    <div style={{ padding: "6px 17px 24px" }}>
+      <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>Habit · {goal} min a day · {read.when || "before bed"}</div>
+      <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: "8px 0 20px", letterSpacing: -0.54 }}>Read</h1>
+
+      {/* TODAY'S READING */}
+      <div style={{ position: "relative", overflow: "hidden", background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: "16px 16px 16px 18px", marginBottom: 18 }}>
+        <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 2, background: AC.base }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: SANS, fontSize: 11, fontWeight: 500, color: AC.a300 }}>Today · {doneMin} of {goal} min</div>
+            <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink, marginTop: 4 }}>{left === 0 ? "Done for today" : `${left} min to go · ${read.when || "before bed"}`}</div>
+          </div>
+          <Ring pct={(doneMin / goal) * 100} />
+        </div>
+        <div style={{ display: "flex", gap: 6, marginTop: 13 }}>
+          {[5, 10, 20].map((n) => (
+            <button key={n} onClick={() => addMin(n)} style={{ flex: 1, height: 36, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.ink, fontFamily: SANS, fontSize: 13, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>+{n} min</button>
+          ))}
+          {doneMin > 0 && <button onClick={() => setRead((r) => ({ ...r, log: { ...r.log, [todayKey]: 0 } }))} style={{ width: 42, height: 36, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.faint, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }} aria-label="Clear today"><RotateCcw size={14} /></button>}
+        </div>
+      </div>
+
+      {/* QUOTE BOX */}
+      <SectionLabel icon={<Quotes size={13} />}>Keep something from it</SectionLabel>
+      <div style={{ background: C.card, border: `1px solid ${NEU.n800}`, borderRadius: 8, padding: 14, marginBottom: 18 }}>
+        <textarea value={draftQuote} onChange={(e) => setDraftQuote(e.target.value)} rows={3} placeholder="Write down a quote or impression"
+          style={{ width: "100%", minHeight: 88, background: "transparent", border: "none", outline: "none", resize: "none", fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, color: C.ink }} />
+        <input value={draftSource} onChange={(e) => setDraftSource(e.target.value)} placeholder="Source · page (optional)"
+          style={{ width: "100%", background: "transparent", border: "none", outline: "none", fontFamily: SANS, fontSize: 12.5, color: C.sub, padding: "4px 0 10px" }} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderTop: `1px solid ${C.lineSoft}`, paddingTop: 11 }}>
+          <button onClick={() => setTagOpen(true)} style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 26, padding: "0 11px", borderRadius: 99, cursor: "pointer", WebkitTapHighlightColor: "transparent", fontFamily: SANS, fontSize: 11.5, ...(draftTag ? { border: "none", background: ACC_BG, color: ACC } : { border: `1px dashed ${C.line}`, background: "none", color: NEU.n600 }) }}>
+            <Tag size={12} /> {draftTag ? `#${draftTag}` : "Add tag"}
+          </button>
+          <button onClick={logQuote} disabled={!draftQuote.trim()} style={{ height: 26, padding: "0 13px", borderRadius: 99, border: `1px solid ${draftQuote.trim() ? AC.base : C.line}`, background: "none", color: draftQuote.trim() ? ACC : C.faint, fontFamily: SANS, fontSize: 11.5, fontWeight: 500, cursor: draftQuote.trim() ? "pointer" : "default", WebkitTapHighlightColor: "transparent" }}>Log quote</button>
+        </div>
+      </div>
+
+      {/* STATS */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 18 }}>
+        {[{ k: "This week", v: hm(readWeekTotal(read)) }, { k: "Streak", v: `${readStreak(read)}d`, acc: true }].map((s) => (
+          <Card key={s.k} style={{ padding: "13px 14px" }}>
+            <div style={{ fontFamily: SANS, fontSize: 9, fontWeight: 500, letterSpacing: 1.1, textTransform: "uppercase", color: NEU.n600 }}>{s.k}</div>
+            <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 500, color: s.acc ? AC.a300 : C.ink, marginTop: 5, fontVariantNumeric: "tabular-nums", letterSpacing: -0.3 }}>{s.v}</div>
+          </Card>
+        ))}
+      </div>
+
+      {/* LIBRARY */}
+      <SectionLabel>Your library</SectionLabel>
+      {quotes.length === 0 ? (
+        <Card style={{ padding: 24, textAlign: "center" }}>
+          <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, lineHeight: 1.55 }}>Nothing saved yet. Anything you write down above lands here, searchable.</div>
+        </Card>
+      ) : (<>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, border: `1px solid ${C.line}`, borderRadius: 8, padding: "0 12px", height: 38, marginBottom: 10 }}>
+          <Search size={15} color={C.faint} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${quotes.length} quote${quotes.length === 1 ? "" : "s"}`} style={{ border: "none", outline: "none", background: "transparent", fontFamily: SANS, fontSize: 16, color: C.ink, flex: 1, minWidth: 0 }} />
+          {q && <X size={15} color={C.faint} onClick={() => setQ("")} style={{ cursor: "pointer" }} />}
+        </div>
+        {counts.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+            {counts.slice(0, 6).map(({ tag, n }) => {
+              const on = needle === tag;
+              return <button key={tag} onClick={() => setQ(on ? "" : tag)} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px", borderRadius: 99, border: on ? `1px solid ${AC.base}` : "none", background: on ? ACC_BG : NEU.n900, color: on ? ACC : C.ink, fontFamily: SANS, fontSize: 11.5, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>#{tag} <span style={{ color: on ? ACC : NEU.n600 }}>{n}</span></button>;
+            })}
+          </div>
+        )}
+        {shown.length === 0 ? (
+          <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, textAlign: "center", padding: "18px 0" }}>Nothing matches “{q}”.</div>
+        ) : shown.map((qt) => (
+          <Card key={qt.id} style={{ padding: 15, marginBottom: 9 }}>
+            <div style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, color: C.ink }}>{qt.text}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+              {qt.tag && <span style={{ fontFamily: SANS, fontSize: 11, color: ACC, background: ACC_BG, padding: "3px 8px", borderRadius: 99 }}>#{qt.tag}</span>}
+              <span style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{qt.source || fmtDate(qt.createdAt)}</span>
+              <button onClick={() => removeQuote(qt.id)} aria-label="Delete quote" style={{ background: "none", border: "none", cursor: "pointer", padding: 2, display: "flex", flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Trash2 size={14} color={C.faint} /></button>
+            </div>
+          </Card>
+        ))}
+      </>)}
+
+      {tagOpen && <TagSheet quotes={quotes} current={draftTag} onPick={(t) => { setDraftTag(t); setTagOpen(false); }} onClose={() => setTagOpen(false)} />}
+    </div>
+  );
+}
+
+/* ================================================================
    PILLARS — the five lifestyle modules. Train ships first; the rest are
    visible but locked. Adding one later is a `locked: false` flip plus a
    render line, not a shell rewrite.
@@ -2265,7 +2435,7 @@ function Habits({ habits, setHabits }) {
 const PILLARS = [
   { id: "today", label: "Today", Icon: Home },
   { id: "train", label: "Train", Icon: Dumbbell },
-  { id: "read", label: "Read", Icon: BookOpen, locked: true, blurb: "Your reading list, daily minutes and highlights will live here." },
+  { id: "read", label: "Read", Icon: BookOpen },
   { id: "habits", label: "Habits", Icon: Target },
   { id: "finance", label: "Finance", Icon: Wallet, locked: true, blurb: "Budgets, savings and your mortgage will live here." },
 ];
@@ -2295,6 +2465,7 @@ export default function App() {
   const [maxes, setMaxes] = usePersist("wa_maxes", {});
   const [equipment, setEquipment] = usePersist("wa_equipment", DEFAULT_EQUIPMENT);
   const [habits, setHabits] = usePersist("wa_habits", []);
+  const [read, setRead] = usePersist("wa_read", READ_DEFAULT);
   const [tab, setTab] = useState("today");
   const [settingsOpen, setSettingsOpen] = useState(false);
   // one-time cleanup: drop the old auto-seeded p1/p2/p3 defaults if they were never actually started
@@ -2304,7 +2475,7 @@ export default function App() {
 
   const finishSession = (session, updatedDays, readiness) => { setPrograms((ps) => ps.map((p) => p.id === session.programId ? { ...p, days: updatedDays, lastReadiness: readiness } : p)); setHistory((h) => [...h, session]); };
   const reorderSchedule = (id, scheduleDays) => setPrograms((ps) => ps.map((p) => p.id === id ? { ...p, scheduleDays } : p));
-  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment", "wa_habits"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setHabits([]); setProfile({ onboarded: false }); setTab("today"); setSettingsOpen(false); };
+  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment", "wa_habits", "wa_read"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setHabits([]); setRead(READ_DEFAULT); setProfile({ onboarded: false }); setTab("today"); setSettingsOpen(false); };
 
   const pillar = PILLARS.find((p) => p.id === tab);
   const navId = TAB_PARENT[tab] ?? tab;
@@ -2314,8 +2485,9 @@ export default function App() {
       <div style={{ width: "100%", maxWidth: 430, background: C.page, display: "flex", flexDirection: "column", height: "100%" }}>
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
           {pillar?.locked && <LockedScreen label={pillar.label} Icon={pillar.Icon} blurb={pillar.blurb} />}
-          {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} habits={habits} setHabits={setHabits} go={setTab} onSettings={openSettings} />}
+          {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} habits={habits} setHabits={setHabits} read={read} go={setTab} onSettings={openSettings} />}
           {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} onReorderSchedule={reorderSchedule} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
+          {tab === "read" && <Read read={read} setRead={setRead} />}
           {tab === "habits" && <Habits habits={habits} setHabits={setHabits} />}
           {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} go={setTab} />}
         </div>
