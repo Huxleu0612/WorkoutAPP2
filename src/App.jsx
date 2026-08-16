@@ -47,6 +47,9 @@ const C = {
   dragShadow: "0 0 0 1px #595D6C, 0 12px 28px rgba(0,0,0,0.6)",
   liftShadow: "0 6px 16px rgba(0,0,0,0.5)",
 };
+// Nocturne's accent/neutral ramps, for the places the design calls out a specific step by name
+const AC = { base: "#9184D9", a300: "#D2CEFD", a400: "#B5ABFC", a700: "#5D5294", a800: "#423A6A", a900: "#2B2741" };
+const NEU = { n200: "#E4E7F5", n400: "#B2B6CA", n500: "#9397AB", n600: "#75798C", n700: "#595D6C", n800: "#3F424D", n900: "#292B31" };
 const ACC = "#B5ABFC", ACC_BG = "rgba(145,132,217,0.18)";
 const AI_ACC = "#C8A9F0", AI_BG = "rgba(200,169,240,0.15)", AI_BORDER = "rgba(200,169,240,0.35)";
 const MONO = "'SF Mono','JetBrains Mono','Roboto Mono',ui-monospace,monospace";
@@ -599,8 +602,18 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
     const afterStart = startedAt0 ? startOfDay(dt) >= startedAt0 : false;
     const wDone = scheduled ? !!sessionForWorkout(history, active, dt, aidx) : false;
     const missed = scheduled && past && !wDone && afterStart && !paused;
-    return { dt, key, dow, aidx, scheduled, done, wDone, weighed, missed, isToday: sameDay(dt, new Date()) };
+    // The week tracker's bar is the share of that day's open items that got closed. Until Habits
+    // ships, a day's items are its scheduled workout (if any) plus the weigh-in.
+    const items = 1 + (scheduled ? 1 : 0);
+    const closed = (weighed ? 1 : 0) + (wDone ? 1 : 0);
+    const pct = Math.round((closed / items) * 100);
+    return { dt, key, dow, aidx, scheduled, done, wDone, weighed, missed, past, pct, isToday: sameDay(dt, new Date()) };
   });
+  const now = new Date();
+  const todayRow = days.find((d) => d.isToday);
+  const openToday = todayRow ? (todayRow.scheduled && !todayRow.wDone ? 1 : 0) + (todayRow.weighed ? 0 : 1) : (weightLog[todayKey] != null ? 0 : 1);
+  const monthCount = (back) => { const m = new Date(now.getFullYear(), now.getMonth() - back, 1), nx = new Date(m.getFullYear(), m.getMonth() + 1, 1); return history.filter((h) => { const d = new Date(h.date); return d >= m && d < nx; }).length; };
+  const monthDone = monthCount(0), monthPrev = monthCount(1);
 
   const ndi = nextDayIndex(history, active);
   const selDay = days.find((d) => d.key === selKey) || days[0];
@@ -629,37 +642,37 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
   if (view === "stats" && active) return <StatsView sessions={sessionsFor(history, active.id)} unit={u} title={active.name} sub="Program stats" onBack={() => setView("main")} />;
 
   return (
-    <div style={{ padding: "14px 18px 24px" }}>
-      {/* GREETING */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
-        <div>
-          <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, fontWeight: 500 }}>{greet},</div>
-          <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 720, color: C.ink, margin: "2px 0 0", letterSpacing: -0.6 }}>{profile.name || "Athlete"}</h1>
-        </div>
-        <button onClick={() => go("profile")} aria-label="Settings" style={{ width: 46, height: 46, borderRadius: 23, border: `1px solid ${C.onDarkLine}`, background: C.graphite, color: C.onDark, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 17, fontWeight: 650, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{(profile.name || "?").split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}</button>
+    <div style={{ padding: "6px 17px 24px" }}>
+      {/* KICKER + GREETING */}
+      <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>
+        {WD_LONG[now.getDay()]} {now.getDate()} {MON[now.getMonth()]} · {openToday === 0 ? "nothing open" : `${openToday} open`}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, margin: "8px 0 20px" }}>
+        <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.54, lineHeight: 1.15 }}>{greet}, {profile.name || "Athlete"}</h1>
+        <button onClick={() => go("profile")} aria-label="Settings" style={{ width: 34, height: 34, flexShrink: 0, borderRadius: 17, border: `1px solid ${AC.a800}`, background: AC.a900, color: NEU.n200, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 13, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{(profile.name || "?").trim().charAt(0).toUpperCase() || "?"}</button>
       </div>
 
-      {/* WEEK STREAK */}
-      <Card style={{ padding: "16px 12px", marginBottom: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 4px", marginBottom: 14 }}>
-          <MiniStep onClick={() => setWkOffset(wkOffset - 1)}><ChevronLeft size={18} /></MiniStep>
+      {/* WEEK TRACKER */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "0 2px 8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button onClick={() => setWkOffset(wkOffset - 1)} aria-label="Previous week" style={{ background: "none", border: "none", cursor: "pointer", padding: 2, display: "flex", WebkitTapHighlightColor: "transparent" }}><ChevronLeft size={15} color={C.faint} /></button>
           <Eyebrow>{wkOffset === 0 ? "This week" : `${weekStart.getDate()} ${MON[weekStart.getMonth()]} – ${addDays(weekStart, 6).getDate()} ${MON[addDays(weekStart, 6).getMonth()]}`}</Eyebrow>
-          <MiniStep onClick={() => setWkOffset(Math.min(0, wkOffset + 1))}><ChevronRight size={18} color={wkOffset < 0 ? C.ink : C.faint} /></MiniStep>
+          <button onClick={() => setWkOffset(Math.min(0, wkOffset + 1))} aria-label="Next week" disabled={wkOffset >= 0} style={{ background: "none", border: "none", cursor: wkOffset < 0 ? "pointer" : "default", padding: 2, display: "flex", WebkitTapHighlightColor: "transparent" }}><ChevronRight size={15} color={wkOffset < 0 ? C.faint : "transparent"} /></button>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2 }}>
+        {monthDone > 0 && <div style={{ fontFamily: SANS, fontSize: 11, color: AC.a300, whiteSpace: "nowrap" }}>{monthDone} this month{monthPrev > 0 ? ` · was ${monthPrev}` : ""}</div>}
+      </div>
+      <Card style={{ padding: 11, marginBottom: 16, boxShadow: C.shadowSm }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6 }}>
           {days.map((s, i) => {
             const sel = s.key === selKey;
-            const ring = s.done ? C.ink : sel ? ACC : s.missed ? C.amber : s.isToday ? ACC : s.scheduled ? C.line : C.lineSoft;
+            const fill = s.pct >= 90 ? AC.base : s.pct >= 50 ? AC.a700 : AC.a800;
             return (
-              <button key={i} onClick={() => setSelKey(s.key)} style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 0", WebkitTapHighlightColor: "transparent" }}>
-                <div style={{ fontFamily: MONO, fontSize: 9.5, color: s.isToday ? ACC : C.faint, fontWeight: s.isToday ? 700 : 400, marginBottom: 6 }}>{WD_LETTER[s.dow]}</div>
-                <div style={{ position: "relative", width: 38, height: 38, margin: "0 auto" }}>
-                  <div style={{ width: 38, height: 38, borderRadius: 19, display: "flex", alignItems: "center", justifyContent: "center", background: s.done ? C.ink : sel ? ACC_BG : "transparent", border: `2px solid ${ring}` }}>
-                    {s.done ? <Check size={15} color={C.page} strokeWidth={3} /> : <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 600, color: s.isToday || sel ? ACC : C.ink }}>{s.dt.getDate()}</span>}
-                  </div>
-                  {s.scheduled && <div style={{ position: "absolute", bottom: -3, right: -3, width: 17, height: 17, borderRadius: 9, background: s.wDone ? C.green : s.missed ? C.amber : s.isToday ? ACC : C.ink, border: `2px solid ${C.card}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Dumbbell size={8} color={C.page} strokeWidth={2.6} /></div>}
+              <button key={i} onClick={() => setSelKey(s.key)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 5, WebkitTapHighlightColor: "transparent" }}>
+                <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, color: s.isToday ? AC.a300 : C.faint }}>{WD_LETTER[s.dow]}</div>
+                <div style={{ width: "100%", height: 34, borderRadius: 4, background: NEU.n900, display: "flex", alignItems: "flex-end", overflow: "hidden", outline: s.isToday ? `1px solid ${AC.a300}` : sel ? `1px solid ${NEU.n700}` : "none", outlineOffset: 1 }}>
+                  <div style={{ width: "100%", height: `${s.pct}%`, background: fill, borderRadius: 4 }} />
                 </div>
-                <div style={{ width: 5, height: 5, borderRadius: 3, margin: "7px auto 0", background: s.weighed ? C.green : "transparent" }} />
+                <Dumbbell size={12} weight={s.wDone ? "fill" : "regular"} color={s.wDone ? AC.a300 : s.scheduled ? (s.missed ? C.amber : NEU.n400) : NEU.n900} />
               </button>
             );
           })}
@@ -672,10 +685,10 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
           const byEx = {};
           (selSession.sets || []).forEach((x) => { (byEx[x.exId] = byEx[x.exId] || []).push(x); });
           return (
-            <Card style={{ padding: 18, marginBottom: 14 }}>
+            <Card style={{ padding: 18, marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-                <div><div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.2, color: C.green, fontWeight: 600 }}>{selDay.isToday ? "COMPLETED TODAY" : "COMPLETED"}</div><div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 700, color: C.ink, marginTop: 4 }}>{selSession.dayName}</div></div>
-                <div style={{ width: 40, height: 40, borderRadius: 12, background: C.greenBg, display: "flex", alignItems: "center", justifyContent: "center" }}><Check size={20} color={C.green} strokeWidth={3} /></div>
+                <div><div style={{ fontFamily: SANS, fontSize: 11, fontWeight: 500, color: C.green }}>{selDay.isToday ? "Completed today" : "Completed"}</div><div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, marginTop: 4, letterSpacing: -0.3 }}>{selSession.dayName}</div></div>
+                <div style={{ width: 40, height: 40, borderRadius: 8, background: C.greenBg, display: "flex", alignItems: "center", justifyContent: "center" }}><Check size={20} color={C.green} /></div>
               </div>
               {Object.entries(byEx).map(([id, ss]) => (
                 <div key={id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 0", borderTop: `1px solid ${C.lineSoft}` }}>
@@ -688,42 +701,39 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go }) 
         }
         if (!active || !active.days.length) {
           return (
-            <button onClick={() => go("programs")} style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", background: C.card, borderRadius: 14, border: `1px solid ${C.line}`, padding: 20, marginBottom: 14, WebkitTapHighlightColor: "transparent" }}>
-              <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.2, color: C.faint, fontWeight: 600 }}>NO ACTIVE PROGRAM</div>
-              <div style={{ fontFamily: SANS, fontSize: 19, fontWeight: 700, color: C.ink, margin: "6px 0 10px" }}>Choose a program to begin</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: 1, color: ACC }}>GO TO PROGRAMS</span><ChevronRight size={15} color={ACC} /></div>
+            <button onClick={() => go("programs")} style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", background: C.card, borderRadius: 14, border: `1px solid ${C.line}`, padding: 20, marginBottom: 16, WebkitTapHighlightColor: "transparent" }}>
+              <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: C.faint }}>No active program</div>
+              <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, margin: "8px 0 12px", letterSpacing: -0.3 }}>Choose a program to begin</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 500, color: ACC }}>Go to programs</span><ChevronRight size={15} color={ACC} /></div>
             </button>
           );
         }
         if (selDay.scheduled) {
           const aidx = assignedIdx(active, selDay.dt) ?? 0;
           const w = active.days[aidx] || active.days[0];
-          const label = selDay.isToday ? "TODAY'S WORKOUT" : selDay.past ? "MISSED — MAKE IT UP" : "COMING UP";
-          const color = selDay.missed ? C.amber : ACC;
+          const when = selDay.isToday ? "Today" : `${WD_LONG[selDay.dow]} ${selDay.dt.getDate()} ${MON[selDay.dt.getMonth()]}`;
+          const label = selDay.missed ? `Missed · ${when}` : selDay.past ? `Not logged · ${when}` : `Up next · ${when}`;
+          const bar = selDay.missed ? C.amber : selDay.past ? C.faint : AC.base;
           return (
-            <Card style={{ padding: 18, marginBottom: 14 }}>
-              <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.2, color: color, fontWeight: 600 }}>{label}</div>
-              <div style={{ fontFamily: SANS, fontSize: 22, fontWeight: 720, color: C.ink, margin: "5px 0 12px", letterSpacing: -0.4 }}>{wLabel(aidx)}</div>
-              <div style={{ marginBottom: 14 }}>
-                {w.ex.slice(0, 4).map((e, k) => (
-                  <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: k === 0 ? "none" : `1px solid ${C.lineSoft}` }}>
-                    <div style={{ width: 7, height: 7, borderRadius: 4, background: C.faint, flexShrink: 0 }} />
-                    <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink, flex: 1 }}>{exName(e.id)}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.faint }}>{setCount(e)} × sets</span>
-                  </div>
-                ))}
-                {w.ex.length > 4 && <div style={{ fontFamily: SANS, fontSize: 12, color: C.faint, marginTop: 8 }}>+{w.ex.length - 4} more</div>}
+            <button onClick={() => go("train")} style={{ position: "relative", display: "block", width: "100%", textAlign: "left", overflow: "hidden", cursor: "pointer", background: C.card, borderRadius: 14, border: `1px solid ${C.line}`, padding: "16px 16px 16px 20px", marginBottom: 16, WebkitTapHighlightColor: "transparent" }}>
+              <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 2, background: bar }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: SANS, fontSize: 11, fontWeight: 500, color: selDay.missed ? C.amber : selDay.past ? C.faint : AC.a300 }}>{label}</div>
+                  <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, margin: "4px 0 6px", letterSpacing: -0.3 }}>{wLabel(aidx)} · Week {programWeek(active)}</div>
+                  <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{w.ex.map((e) => exName(e.id)).join(" · ")}</div>
+                </div>
+                <div style={{ width: 46, height: 46, flexShrink: 0, borderRadius: 8, border: `1px solid ${AC.base}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Play size={18} weight="fill" color={ACC} /></div>
               </div>
-              <BigButton tone="acc" onClick={() => go("train")}><Play size={17} /> Start workout</BigButton>
-            </Card>
+            </button>
           );
         }
         return (
-          <Card style={{ padding: 22, marginBottom: 14, textAlign: "center" }}>
-            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.2, color: C.faint, fontWeight: 600 }}>REST DAY</div>
-            <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 700, color: C.ink, margin: "6px 0 4px" }}>{selDay.isToday ? "Rest up" : `${WD_LONG[selDay.dow]} ${selDay.dt.getDate()} ${MON[selDay.dt.getMonth()]}`}</div>
-            <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, lineHeight: 1.5 }}>Nothing planned — recovery is where the gains happen.</div>
-            <button onClick={() => go("train")} style={{ marginTop: 12, height: 44, padding: "0 8px", background: "none", border: "none", cursor: "pointer", fontFamily: SANS, fontSize: 13, fontWeight: 600, color: ACC }}>Start a workout anyway →</button>
+          <Card style={{ padding: 22, marginBottom: 16, textAlign: "center" }}>
+            <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: C.faint }}>Rest day</div>
+            <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, margin: "8px 0 5px", letterSpacing: -0.3 }}>{selDay.isToday ? "Rest up" : `${WD_LONG[selDay.dow]} ${selDay.dt.getDate()} ${MON[selDay.dt.getMonth()]}`}</div>
+            <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, lineHeight: 1.55 }}>Nothing planned — recovery is where the gains happen.</div>
+            <button onClick={() => go("train")} style={{ marginTop: 14, height: 40, padding: "0 16px", background: "none", border: `1px solid ${AC.base}`, borderRadius: 8, cursor: "pointer", fontFamily: SANS, fontSize: 13, fontWeight: 500, color: ACC, WebkitTapHighlightColor: "transparent" }}>Train anyway</button>
           </Card>
         );
       })()}
