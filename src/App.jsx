@@ -19,6 +19,8 @@ import {
   RocketIcon as Rocket, CubeIcon as Boxes, PersonSimpleIcon as PersonStanding,
   GridNineIcon as Grid3x3, HexagonIcon as Hexagon, MedalIcon as Medal,
   BookOpenIcon as BookOpen, WalletIcon as Wallet, LockSimpleIcon as LockSimple,
+  CheckCircleIcon as CheckCircle, CircleDashedIcon as CircleDashed, CaretDownIcon as CaretDown,
+  CaretUpIcon as CaretUp, DotsThreeIcon as DotsThree,
 } from "@phosphor-icons/react";
 import EXERCISES_DATA from "./data/exercises.json";
 import { PROGRAM_CATALOG } from "./data/programCatalog";
@@ -819,6 +821,72 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, go, on
     </div>
   );
 }
+/* ================================================================
+   ACTIVE SESSION CHROME
+================================================================ */
+// re-renders once a second so the session and rest clocks stay live
+function useTicker(on) {
+  const [, bump] = useState(0);
+  useEffect(() => { if (!on) return; const id = setInterval(() => bump((n) => n + 1), 1000); return () => clearInterval(id); }, [on]);
+}
+const mmss = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+const REST_MS = 90000, REST_SCALE = 120000;
+
+function SessionHeader({ live, label, sub, doneCount, totalSets, onMinimise, menuOpen, setMenuOpen, onDiscard }) {
+  useTicker(true);
+  const elapsed = live.startedAt ? Date.now() - new Date(live.startedAt).getTime() : 0;
+  const round = { width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, WebkitTapHighlightColor: "transparent" };
+  return (
+    <div style={{ position: "sticky", top: -14, zIndex: 20, background: C.page, margin: "0 -17px", padding: "14px 17px 10px", borderBottom: `1px solid ${C.line}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {/* the caret leaves the session running rather than ending it, so it is labelled */}
+        <button onClick={onMinimise} style={{ ...round, width: "auto", padding: "0 11px", gap: 5 }} aria-label="Minimise session"><CaretDown size={16} /><span style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 500 }}>Minimise</span></button>
+        <div style={{ flex: 1, textAlign: "center", minWidth: 0 }}>
+          <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.4, textTransform: "uppercase", color: NEU.n500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
+          <div style={{ fontFamily: SANS, fontSize: 19, fontWeight: 500, color: C.ink, fontVariantNumeric: "tabular-nums", letterSpacing: -0.3 }}>{mmss(elapsed)}</div>
+        </div>
+        <div style={{ position: "relative", flexShrink: 0 }}>
+          <button onClick={() => setMenuOpen(!menuOpen)} style={round} aria-label="Session options"><DotsThree size={20} weight="bold" /></button>
+          {menuOpen && (
+            <div style={{ position: "absolute", right: 0, top: 42, background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, boxShadow: C.shadowMd, padding: 4, zIndex: 30, minWidth: 168 }}>
+              <button onClick={onDiscard} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 12px", borderRadius: 7, border: "none", background: "none", cursor: "pointer", fontFamily: SANS, fontSize: 14, color: C.red, WebkitTapHighlightColor: "transparent" }}><Trash2 size={15} /> Discard workout</button>
+            </div>
+          )}
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
+        <span style={{ fontFamily: SANS, fontSize: 11.5, color: C.sub, fontVariantNumeric: "tabular-nums" }}>{doneCount} of {totalSets} sets</span>
+        <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600 }}>· {sub}</span>
+      </div>
+    </div>
+  );
+}
+
+function RestFooter({ until, onExtend, onSkip }) {
+  useTicker(true);
+  const left = until - Date.now();
+  useEffect(() => { if (left <= 0) onSkip(); }, [left <= 0]);
+  if (left <= 0) return null;
+  const R = 20, CIRC = 2 * Math.PI * R;
+  const frac = Math.min(1, left / REST_SCALE);
+  const chip = { height: 32, padding: "0 11px", borderRadius: 8, background: "none", cursor: "pointer", fontFamily: SANS, fontSize: 12.5, fontWeight: 500, WebkitTapHighlightColor: "transparent" };
+  return (
+    <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: "calc(84px + env(safe-area-inset-bottom))", width: "min(100% - 34px, 396px)", zIndex: 40, background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, boxShadow: C.shadowMd, padding: "10px 12px", display: "flex", alignItems: "center", gap: 11 }}>
+      <svg width={46} height={46} style={{ flexShrink: 0 }}>
+        <circle cx={23} cy={23} r={R} stroke={NEU.n800} strokeWidth={2.5} fill="none" />
+        <circle cx={23} cy={23} r={R} stroke={AC.base} strokeWidth={2.5} fill="none" strokeDasharray={CIRC} strokeDashoffset={CIRC * (1 - frac)} strokeLinecap="round" transform="rotate(-90 23 23)" />
+      </svg>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>Rest</div>
+        <div style={{ fontFamily: SANS, fontSize: 22, fontWeight: 500, color: C.ink, fontVariantNumeric: "tabular-nums", letterSpacing: -0.4 }}>{mmss(left)}</div>
+      </div>
+      <button onClick={() => onExtend(-15000)} style={{ ...chip, border: `1px solid ${C.line}`, color: C.sub }}>−15s</button>
+      <button onClick={() => onExtend(15000)} style={{ ...chip, border: `1px solid ${C.line}`, color: C.sub }}>+15s</button>
+      <button onClick={onSkip} style={{ ...chip, border: `1px solid ${AC.base}`, color: ACC }}>Skip</button>
+    </div>
+  );
+}
+
 function Train({ profile, programs, history, draft, setDraft, onFinish, onReorderSchedule, go, equipment, setEquipment }) {
   const active = activeProgram(programs);
   const u = profile.unit;
@@ -830,6 +898,9 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [detail, setDetail] = useState(null);
   const [calcOpen, setCalcOpen] = useState(null);
+  const [restUntil, setRestUntil] = useState(null);
+  const [expandedEx, setExpandedEx] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const scheduleSensors = useReorderSensors();
   const swapScheduleDays = (dowA, dowB) => {
     if (!active || dowA === dowB) return;
@@ -864,8 +935,9 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
     setOpenRating(null); setConfirmDiscard(false); setPhase("active");
   };
   const upd = (key, field, val) => setDraft((d) => ({ ...d, setData: { ...d.setData, [key]: { ...(d.setData[key] || {}), [field]: val } } }));
-  const rate = (key, c) => setDraft((d) => ({ ...d, done: { ...d.done, [key]: c } }));
-  const discard = () => { setDraft(null); setConfirmDiscard(false); setPhase("schedule"); };
+  // logging a set is also what starts the rest clock — there is no separate action for it
+  const rate = (key, c) => { setDraft((d) => ({ ...d, done: { ...d.done, [key]: c } })); setRestUntil(Date.now() + REST_MS); };
+  const discard = () => { setDraft(null); setConfirmDiscard(false); setRestUntil(null); setPhase("schedule"); };
 
   const finish = (readiness) => {
     const idx = live.dayIdx, sdAll = live.setData, dn = live.done;
@@ -1090,6 +1162,16 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
     return n + (specs ? specs.length : setCount(exx));
   }, 0);
   const doneCount = Object.keys(done).length;
+  // the first exercise with a set still unlogged is "current"; it stays expanded and the rest
+  // collapse. Tapping a collapsed one overrides that until it is dismissed.
+  const exSetCounts = day.ex.map((exx) => {
+    const strat = progressionOf(active, exx);
+    const specs = strat.getSetSpecs ? strat.getSetSpecs(exx, { lastReadiness: active.lastReadiness, program: active, sessionCount }) : null;
+    return specs ? specs.length : setCount(exx);
+  });
+  const firstOpen = exSetCounts.findIndex((n, ei) => Array.from({ length: n }).some((_, si) => !done[`${ei}-${si}`]));
+  const currentIdx = firstOpen === -1 ? day.ex.length - 1 : firstOpen;
+  const expandedIdx = expandedEx != null ? expandedEx : currentIdx;
 
   /* ================= REVIEW ================= */
   if (phase === "review") return (
@@ -1112,13 +1194,10 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
 
   /* ================= ACTIVE ================= */
   return (
-    <div style={{ padding: "6px 18px 24px" }}>
-      <button onClick={() => setPhase("schedule")} style={backBtn}><ChevronLeft size={20} /> Train</button>
-      <PageTitle sub={subLine}>{wLabel(live.dayIdx)}</PageTitle>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: -12, marginBottom: 16 }}>
-        <span style={{ fontFamily: MONO, fontSize: 12, color: C.sub }}>{doneCount} / {totalSets} SETS COMPLETE</span>
-        <span style={{ fontFamily: SANS, fontSize: 11.5, color: C.amber, background: C.amberBg, padding: "3px 9px", borderRadius: 6 }}>Saved as you go</span>
-      </div>
+    <div style={{ padding: "0 17px 96px" }}>
+      <SessionHeader live={live} label={wLabel(live.dayIdx)} sub={subLine} doneCount={doneCount} totalSets={totalSets}
+        onMinimise={() => setPhase("schedule")} menuOpen={menuOpen} setMenuOpen={setMenuOpen}
+        onDiscard={() => { setMenuOpen(false); setConfirmDiscard(true); }} />
       {day.ex.map((exx, ei) => {
         const strategy = progressionOf(active, exx);
         const ctx = { lastReadiness: active.lastReadiness, program: active, sessionCount };
@@ -1133,12 +1212,36 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
         const bw = isBW(exx.id);
         const prev = exx.last?.logged ? (exx.last.w > 0 ? `${wStr(exx.last.w, u)}×${exx.last.reps}` : `${exx.last.reps}`) : "—";
         const th = { flex: 1, fontFamily: MONO, fontSize: 10, letterSpacing: .8, color: C.faint, textAlign: "center" };
+
+        // completed / current / upcoming — only the current exercise stays expanded
+        const ratedCount = rows.filter((_, si) => done[`${ei}-${si}`]).length;
+        const exDone = ratedCount >= rows.length;
+        if (ei !== expandedIdx) {
+          const logged = rows.map((_, si) => ({ w: parseFloat(setData[`${ei}-${si}`]?.w) || 0, reps: parseInt(setData[`${ei}-${si}`]?.reps) || 0, on: !!done[`${ei}-${si}`] })).filter((l) => l.on);
+          const topW = logged.length ? Math.max(...logged.map((l) => l.w)) : 0;
+          const vol = logged.reduce((n, l) => n + l.w * l.reps, 0);
+          const meta = exDone
+            ? [`${ratedCount} set${ratedCount === 1 ? "" : "s"}`, topW > 0 ? `${wStr(topW, u)} ${u}` : null, vol > 0 ? `${kFmt(fmtW(vol, u))} ${u}` : null].filter(Boolean).join(" · ")
+            : `${rows.length} set${rows.length === 1 ? "" : "s"} planned`;
+          return (
+            <button key={ei} onClick={() => setExpandedEx(ei)} style={{ display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 15px", marginBottom: 10, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+              {exDone ? <CheckCircle size={22} weight="fill" color={ACC} /> : <CircleDashed size={22} color={NEU.n700} />}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: exDone ? NEU.n400 : C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{exName(exx.id)}</div>
+                <div style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{meta}</div>
+              </div>
+              <CaretDown size={16} color={C.faint} />
+            </button>
+          );
+        }
         return (
-          <Card key={ei} style={{ padding: 16, marginBottom: 14 }}>
+          <div key={ei} style={{ position: "relative", overflow: "hidden", background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: "16px 16px 16px 18px", marginBottom: 10 }}>
+            <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 2, background: AC.base }} />
             <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 12 }}>
               <ExerciseThumb exercise={exFull(exx.id)} onOpen={setDetail} />
-              <div onClick={() => setDetail(exFull(exx.id))} style={{ flex: 1, cursor: "pointer" }}><div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink }}>{exName(exx.id)}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, marginTop: 1 }}>{exMuscle(exx.id).toUpperCase()}</div></div>
+              <div onClick={() => setDetail(exFull(exx.id))} style={{ flex: 1, cursor: "pointer", minWidth: 0 }}><div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 500, color: C.ink }}>{exName(exx.id)}</div><div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 2 }}>Set {Math.min(ratedCount + 1, rows.length)} of {rows.length} · {exMuscle(exx.id).toLowerCase()}</div></div>
               {!bw && <button onClick={() => setCalcOpen({ initialKg: tm || rec.w || 0 })} style={{ ...miniRound, width: 34, height: 34 }}><Calculator size={15} /></button>}
+              {ei !== currentIdx && <button onClick={() => setExpandedEx(null)} style={{ ...miniRound, width: 34, height: 34 }} aria-label="Collapse"><CaretUp size={15} /></button>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.page, borderRadius: 10, padding: "9px 12px", marginBottom: 12 }}>
               <Arrow size={15} color={dirColor} strokeWidth={2.6} />
@@ -1174,16 +1277,13 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
                 </div>
               );
             })}
-          </Card>
+          </div>
         );
       })}
-      <BigButton tone="dark" onClick={() => setPhase("review")} disabled={doneCount === 0}>Finish workout</BigButton>
-      <div style={{ height: 12 }} />
-      {confirmDiscard ? (
-        <ConfirmPanel title="Discard this workout?" body="Everything you've logged in this session will be deleted. Your previous sessions are unaffected." slideLabel="Slide to discard" onConfirm={discard} onCancel={() => setConfirmDiscard(false)} />
-      ) : (
-        <button onClick={() => setConfirmDiscard(true)} style={{ width: "100%", height: 48, borderRadius: 13, border: `1.5px solid ${C.line}`, background: C.card, color: C.red, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7, WebkitTapHighlightColor: "transparent" }}><Trash2 size={15} /> Discard workout</button>
-      )}
+      <div style={{ height: 6 }} />
+      <BigButton tone="acc" onClick={() => setPhase("review")} disabled={doneCount === 0}>Finish workout</BigButton>
+      {confirmDiscard && <><div style={{ height: 12 }} /><ConfirmPanel title="Discard this workout?" body="Everything you've logged in this session will be deleted. Your previous sessions are unaffected." slideLabel="Slide to discard" onConfirm={discard} onCancel={() => setConfirmDiscard(false)} /></>}
+      {restUntil && <RestFooter until={restUntil} onExtend={(ms) => setRestUntil((t) => Math.max(Date.now() + 1000, t + ms))} onSkip={() => setRestUntil(null)} />}
       {detail && <ExerciseDetail exercise={detail} onClose={() => setDetail(null)} />}
       {calcOpen && <PlateCalculator targetKg={calcOpen.initialKg} equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setCalcOpen(null)} />}
     </div>
