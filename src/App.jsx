@@ -21,6 +21,7 @@ import {
   BookOpenIcon as BookOpen, WalletIcon as Wallet, LockSimpleIcon as LockSimple,
   CheckCircleIcon as CheckCircle, CircleIcon as Circle, CircleDashedIcon as CircleDashed, CaretDownIcon as CaretDown,
   CaretUpIcon as CaretUp, DotsThreeIcon as DotsThree, TagIcon as Tag, QuotesIcon as Quotes,
+  CarIcon as Car, GearSixIcon as GearSix, BellIcon as Bell,
 } from "@phosphor-icons/react";
 import EXERCISES_DATA from "./data/exercises.json";
 import { PROGRAM_CATALOG } from "./data/programCatalog";
@@ -209,6 +210,70 @@ const readMet = (read, key) => readMin(read, key) >= (read.goalMin || 20);
 const readStreak = (read) => { let n = 0, d = startOfDay(new Date()); if (!readMet(read, ymd(d))) d = addDays(d, -1); while (readMet(read, ymd(d))) { n++; d = addDays(d, -1); } return n; };
 const readWeekTotal = (read) => weekKeysOf(new Date()).reduce((n, k) => n + readMin(read, k), 0);
 const hm = (min) => (min >= 60 ? `${Math.floor(min / 60)}h ${min % 60}m` : `${Math.round(min)}m`);
+/* ===== finance =====
+   Mortgage-centred rather than expense tracking. Every figure below is derived from the
+   balances, rates and payments the user enters at each check-in — nothing is carried
+   forward from a previous projection, so a check-in always re-bases the maths. */
+const CURRENCIES = { GBP: "£", EUR: "€", USD: "$", AUD: "A$", NZD: "NZ$" };
+const curSym = (c) => CURRENCIES[c] || "£";
+const money = (n, c) => `${curSym(c)}${Math.round(n).toLocaleString("en-GB")}`;
+const moneyShort = (n, c) => {
+  const s = curSym(c), a = Math.abs(n), sign = n < 0 ? "-" : "";
+  if (a >= 1e6) return `${sign}${s}${(a / 1e6).toFixed(2).replace(/\.?0+$/, "")}M`;
+  if (a >= 1000) return `${sign}${s}${Math.round(a / 1000)}k`;
+  return `${sign}${s}${Math.round(a)}`;
+};
+const FIN_DEFAULT = { currency: "GBP", cadence: "quarterly", lastUpdated: null, groups: [] };
+const monthlyRate = (ratePct) => (ratePct || 0) / 100 / 12;
+// Month-by-month rather than a closed form, because an overpayment goes to the highest-rate
+// loan first and a cleared loan's payment rolls into the next one. No formula covers that.
+const simulateLoans = (loans, extra = 0, cap = 720) => {
+  const ordered = [...loans].sort((a, b) => (b.ratePct || 0) - (a.ratePct || 0));
+  const bal = ordered.map((l) => Math.max(0, l.balance || 0));
+  const rate = ordered.map((l) => monthlyRate(l.ratePct));
+  const pay = ordered.map((l) => Math.max(0, l.paymentMonthly || 0));
+  let months = 0, interestPaid = 0, first = { interest: 0, principal: 0 };
+  if (!bal.some((b) => b > 0)) return { months: 0, interestPaid: 0, first, settles: true };
+  while (bal.some((b) => b > 0.01) && months < cap) {
+    let pool = extra, mInt = 0, mPrin = 0;
+    for (let i = 0; i < bal.length; i++) {
+      if (bal[i] <= 0.01) { pool += pay[i]; continue; }
+      const int = bal[i] * rate[i];
+      const due = Math.min(pay[i], bal[i] + int);
+      const prin = due - int;
+      if (prin <= 0) { mInt += int; continue; } // payment does not cover interest
+      bal[i] = Math.max(0, bal[i] - prin);
+      mInt += int; mPrin += prin;
+    }
+    for (let i = 0; i < bal.length && pool > 0.01; i++) {
+      if (bal[i] <= 0.01) continue;
+      const hit = Math.min(pool, bal[i]);
+      bal[i] -= hit; pool -= hit; mPrin += hit;
+    }
+    interestPaid += mInt;
+    if (months === 0) first = { interest: mInt, principal: mPrin };
+    months++;
+  }
+  return { months, interestPaid, first, settles: months < cap };
+};
+// payment needed to clear a balance in n months
+const paymentFor = (balance, ratePct, months) => {
+  const r = monthlyRate(ratePct);
+  if (months <= 0) return balance;
+  if (r === 0) return balance / months;
+  return (balance * r) / (1 - Math.pow(1 + r, -months));
+};
+const groupTotals = (g) => {
+  const loans = g.loans || [];
+  const balance = loans.reduce((n, l) => n + (l.balance || 0), 0);
+  const payment = loans.reduce((n, l) => n + (l.paymentMonthly || 0), 0);
+  const avgRate = balance > 0 ? loans.reduce((n, l) => n + (l.ratePct || 0) * (l.balance || 0), 0) / balance : 0;
+  return { balance, payment, avgRate, count: loans.length };
+};
+const addMonths = (d, n) => { const z = new Date(d); z.setMonth(z.getMonth() + n); return z; };
+const monthsBetween = (a, b) => (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+const monthLabel = (d) => `${MON[d.getMonth()]} ${d.getFullYear()}`;
+
 const tagCounts = (quotes) => {
   const m = {};
   quotes.forEach((q) => { if (q.tag) m[q.tag] = (m[q.tag] || 0) + 1; });
@@ -1994,7 +2059,7 @@ function Picker({ inDay, onToggle, onBack, dayName }) {
    SETTINGS — a bottom sheet off the Today avatar, not a tab of its own
 ================================================================ */
 const cmToFtIn = (cm) => { const t = cm / 2.54; const f = Math.floor(t / 12); const i = Math.round(t - f * 12); return `${f}'${i}"`; };
-function SettingsSheet({ profile, setProfile, programs, history, weightLog, onReset, equipment, setEquipment, onClose }) {
+function SettingsSheet({ profile, setProfile, programs, history, weightLog, onReset, equipment, setEquipment, fin, setFin, onClose }) {
   const [view, setView] = useState("main");
   const [confirmReset, setConfirmReset] = useState(false);
   const [editingEquip, setEditingEquip] = useState(false);
@@ -2048,6 +2113,18 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
       <Card style={{ padding: "4px 16px", marginBottom: 16 }}>
         <Row label="Weight"><div style={{ width: 132 }}><Segmented small options={[{ v: "kg", l: "kg" }, { v: "lb", l: "lb" }]} value={u} onChange={(v) => setP("unit", v)} /></div></Row>
         <Row label="Height" last><div style={{ width: 132 }}><Segmented small options={[{ v: "cm", l: "cm" }, { v: "ft", l: "ft / in" }]} value={profile.heightUnit} onChange={(v) => setP("heightUnit", v)} /></div></Row>
+      </Card>
+
+      <SectionLabel icon={<Wallet size={13} />}>Money</SectionLabel>
+      <Card style={{ padding: "4px 16px", marginBottom: 16 }}>
+        <Row label="Currency" sub="Used for every money value in Finance">
+          <select value={fin.currency || "GBP"} onChange={(e) => setFin((f) => ({ ...f, currency: e.target.value }))} style={{ background: C.page, border: `1px solid ${C.line}`, borderRadius: 8, color: C.ink, fontFamily: SANS, fontSize: 14, padding: "8px 10px", outline: "none" }}>
+            {Object.keys(CURRENCIES).map((k) => <option key={k} value={k}>{k} {CURRENCIES[k]}</option>)}
+          </select>
+        </Row>
+        <Row label="Update reminder" sub="How often Finance asks you to check in" last>
+          <div style={{ width: 150 }}><Segmented small options={[{ v: "monthly", l: "Monthly" }, { v: "quarterly", l: "Quarterly" }]} value={fin.cadence || "quarterly"} onChange={(v) => setFin((f) => ({ ...f, cadence: v }))} /></div>
+        </Row>
       </Card>
 
       <SectionLabel icon={<Calculator size={13} />}>Equipment</SectionLabel>
@@ -2428,6 +2505,311 @@ function Read({ read, setRead }) {
 }
 
 /* ================================================================
+   FINANCE — mortgage-centred, never shared
+================================================================ */
+const sheetShell = { width: "100%", maxWidth: 430, background: C.card, borderRadius: "14px 14px 0 0", boxShadow: C.shadowLg, padding: "18px 17px 26px", maxHeight: "86vh", overflowY: "auto" };
+const sheetScrim = { position: "fixed", inset: 0, background: C.scrim, zIndex: 60, display: "flex", alignItems: "flex-end", justifyContent: "center" };
+const grabHandle = { width: 36, height: 3, borderRadius: 2, background: C.line, margin: "0 auto 18px" };
+const finField = { width: "100%", background: C.page, border: `1px solid ${C.line}`, borderRadius: 8, padding: "11px 12px", fontFamily: SANS, fontSize: 16, color: C.ink, outline: "none" };
+const finLabel = { fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, marginBottom: 6 };
+const sheetBtn = { flex: 1, height: 44, borderRadius: 8, background: "none", cursor: "pointer", fontFamily: SANS, fontSize: 14.5, fontWeight: 500, WebkitTapHighlightColor: "transparent" };
+
+function LoanSheet({ group, currency, onSave, onDelete, onClose }) {
+  const [name, setName] = useState(group.name || "");
+  const [valuation, setValuation] = useState(String(group.valuation ?? ""));
+  const [loans, setLoans] = useState((group.loans || []).map((l) => ({ ...l })));
+  const [extra, setExtra] = useState(group.overpayment || 0);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const setLoan = (i, k, v) => setLoans((ls) => ls.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
+  const num = (s) => { const n = parseFloat(String(s).replace(/[^0-9.\-]/g, "")); return isNaN(n) ? 0 : n; };
+  const clean = loans.map((l) => ({ ...l, balance: num(l.balance), ratePct: num(l.ratePct), paymentMonthly: num(l.paymentMonthly) }));
+  const base = simulateLoans(clean, 0);
+  const withExtra = simulateLoans(clean, extra);
+  const sooner = base.settles && withExtra.settles ? base.months - withExtra.months : 0;
+  const t = groupTotals({ loans: clean });
+  return (
+    <div onClick={onClose} style={sheetScrim}>
+      <div onClick={(e) => e.stopPropagation()} style={sheetShell}>
+        <div style={grabHandle} />
+        <div style={finLabel}>Name</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Home" style={{ ...finField, fontSize: 17 }} />
+          <Pencil size={14} color={C.faint} />
+        </div>
+        <div style={finLabel}>Valuation</div>
+        <input value={valuation} onChange={(e) => setValuation(e.target.value)} inputMode="decimal" placeholder="1150000" style={{ ...finField, marginBottom: 16 }} />
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ ...finLabel, marginBottom: 0 }}>{money(t.balance, currency)} across {clean.length} loan{clean.length === 1 ? "" : "s"}</div>
+          <button onClick={() => setLoans((ls) => [...ls, { id: `ln_${Date.now()}`, name: `Loan ${ls.length + 1}`, balance: 0, ratePct: 0, paymentMonthly: 0 }])} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: SANS, fontSize: 12, color: ACC, WebkitTapHighlightColor: "transparent" }}>+ Add a loan</button>
+        </div>
+        {clean.map((l, i) => (
+          <div key={l.id || i} style={{ background: C.page, borderRadius: 8, padding: 12, marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <input value={loans[i].name || ""} onChange={(e) => setLoan(i, "name", e.target.value)} placeholder={`Loan ${i + 1}`} style={{ flex: 1, background: "transparent", border: "none", outline: "none", fontFamily: SANS, fontSize: 14, fontWeight: 500, color: C.ink }} />
+              {loans.length > 1 && <button onClick={() => setLoans((ls) => ls.filter((_, j) => j !== i))} aria-label="Remove loan" style={{ background: "none", border: "none", cursor: "pointer", padding: 2, display: "flex" }}><X size={14} color={C.faint} /></button>}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 6 }}>
+              {[["balance", "Balance"], ["ratePct", "Rate %"], ["paymentMonthly", "Per mo"]].map(([k, ph]) => (
+                <div key={k}>
+                  <div style={{ fontFamily: SANS, fontSize: 9.5, color: NEU.n600, marginBottom: 3 }}>{ph}</div>
+                  <input value={loans[i][k] ?? ""} onChange={(e) => setLoan(i, k, e.target.value)} inputMode="decimal" style={{ ...finField, padding: "8px 9px", fontSize: 14 }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        <div style={{ ...finLabel, marginTop: 16 }}>Overpayment · {money(extra, currency)}/mo</div>
+        <input type="range" min={0} max={1500} step={50} value={extra} onChange={(e) => setExtra(Number(e.target.value))} style={{ width: "100%", accentColor: AC.base, marginBottom: 12 }} />
+        <div style={{ background: C.page, borderRadius: 8, padding: 12, marginBottom: 16 }}>
+          <div style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, marginBottom: 9 }}>Across {clean.length === 1 ? "this loan" : "all loans"}</div>
+          {[["Interest this month", money(withExtra.first.interest, currency)],
+            ["Principal this month", money(withExtra.first.principal, currency)],
+            ["Clear by", withExtra.settles ? monthLabel(addMonths(new Date(), withExtra.months)) : "Never at this payment"]].map(([k, v]) => (
+            <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "4px 0" }}>
+              <span style={{ fontFamily: SANS, fontSize: 13, color: C.sub }}>{k}</span>
+              <span style={{ fontFamily: SANS, fontSize: 13, color: C.ink, fontVariantNumeric: "tabular-nums" }}>{v}</span>
+            </div>
+          ))}
+          {sooner > 0 && <div style={{ fontFamily: SANS, fontSize: 13, color: AC.a300, marginTop: 7, paddingTop: 7, borderTop: `1px solid ${C.lineSoft}` }}>{sooner >= 12 ? `${(sooner / 12).toFixed(1)} years sooner` : `${sooner} months sooner`}</div>}
+        </div>
+
+        {group.id && (confirmDel ? (
+          <div style={{ background: C.redBg, borderRadius: 8, padding: 13, marginBottom: 14 }}>
+            <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink, lineHeight: 1.5, marginBottom: 10 }}>Delete {name || "this"} and its loans?</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setConfirmDel(false)} style={{ ...sheetBtn, height: 38, border: `1px solid ${C.line}`, color: C.sub }}>Keep it</button>
+              <button onClick={onDelete} style={{ ...sheetBtn, height: 38, border: `1px solid ${C.red}`, color: C.red }}>Delete</button>
+            </div>
+          </div>
+        ) : (
+          <button onClick={() => setConfirmDel(true)} style={{ display: "flex", alignItems: "center", gap: 7, background: "none", border: "none", cursor: "pointer", padding: "0 0 14px", fontFamily: SANS, fontSize: 13.5, color: C.red }}><Trash2 size={15} /> Delete</button>
+        ))}
+        <div style={{ display: "flex", gap: 9 }}>
+          <button onClick={onClose} style={{ ...sheetBtn, border: `1px solid ${C.line}`, color: C.sub }}>Cancel</button>
+          <button onClick={() => name.trim() && onSave({ name: name.trim(), valuation: num(valuation), loans: clean, overpayment: extra })} style={{ ...sheetBtn, border: `1px solid ${name.trim() ? AC.base : C.line}`, color: name.trim() ? ACC : C.faint }}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GoalSheet({ group, currency, onSave, onClose }) {
+  const loans = group.loans || [];
+  const t = groupTotals(group);
+  const base = simulateLoans(loans, group.overpayment || 0);
+  const baseDate = base.settles ? addMonths(new Date(), base.months) : null;
+  const [months, setMonths] = useState(() => {
+    if (group.goalMonths) return group.goalMonths;
+    return base.settles ? Math.max(12, base.months - 24) : 240;
+  });
+  const target = addMonths(new Date(), months);
+  const needed = loans.reduce((n, l) => n + paymentFor(l.balance || 0, l.ratePct || 0, months), 0);
+  const delta = needed - t.payment;
+  const interestNow = base.settles ? base.interestPaid : null;
+  const interestThen = needed * months - t.balance;
+  const saved = interestNow != null ? interestNow - interestThen : null;
+  const step = (n) => setMonths((m) => Math.max(12, Math.min(480, m + n)));
+  return (
+    <div onClick={onClose} style={sheetScrim}>
+      <div onClick={(e) => e.stopPropagation()} style={sheetShell}>
+        <div style={grabHandle} />
+        <div style={finLabel}>Clear {group.name} by</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
+          <button onClick={() => step(-12)} style={miniRound} aria-label="Earlier"><Minus size={17} /></button>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontFamily: SANS, fontSize: 22, fontWeight: 500, color: C.ink, letterSpacing: -0.4 }}>{monthLabel(target)}</div>
+            <div style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, marginTop: 2 }}>{Math.round(months / 12)} years away</div>
+          </div>
+          <button onClick={() => step(12)} style={miniRound} aria-label="Later"><Plus size={17} /></button>
+        </div>
+        <div style={{ background: C.page, borderRadius: 8, padding: 12, marginBottom: 16 }}>
+          {[["Pay", `${money(needed, currency)}/mo`],
+            ["That is", `${delta >= 0 ? "+" : ""}${money(delta, currency)}/mo vs now`],
+            ["Interest saved", saved != null && saved > 0 ? money(saved, currency) : saved != null ? `${money(-saved, currency)} more` : "—"]].map(([k, v]) => (
+            <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "5px 0" }}>
+              <span style={{ fontFamily: SANS, fontSize: 13, color: C.sub }}>{k}</span>
+              <span style={{ fontFamily: SANS, fontSize: 13, color: k === "Interest saved" && saved > 0 ? AC.a300 : C.ink, fontVariantNumeric: "tabular-nums" }}>{v}</span>
+            </div>
+          ))}
+        </div>
+        {baseDate && <div style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, marginBottom: 16, lineHeight: 1.5 }}>On your current payments these clear {monthLabel(baseDate)}.</div>}
+        <div style={{ display: "flex", gap: 9 }}>
+          <button onClick={onClose} style={{ ...sheetBtn, border: `1px solid ${C.line}`, color: C.sub }}>Cancel</button>
+          <button onClick={() => onSave(months)} style={{ ...sheetBtn, border: `1px solid ${AC.base}`, color: ACC }}>Set goal</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QuarterlyUpdateSheet({ fin, onSave, onClose }) {
+  const [cadence, setCadence] = useState(fin.cadence || "quarterly");
+  const [groups, setGroups] = useState(() => (fin.groups || []).map((g) => ({ ...g, loans: (g.loans || []).map((l) => ({ ...l })) })));
+  const num = (s) => { const n = parseFloat(String(s).replace(/[^0-9.\-]/g, "")); return isNaN(n) ? 0 : n; };
+  const setL = (gi, li, k, v) => setGroups((gs) => gs.map((g, i) => i !== gi ? g : { ...g, loans: g.loans.map((l, j) => (j === li ? { ...l, [k]: v } : l)) }));
+  const setG = (gi, k, v) => setGroups((gs) => gs.map((g, i) => (i === gi ? { ...g, [k]: v } : g)));
+  return (
+    <div onClick={onClose} style={sheetScrim}>
+      <div onClick={(e) => e.stopPropagation()} style={sheetShell}>
+        <div style={grabHandle} />
+        <h2 style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, margin: "0 0 4px", letterSpacing: -0.3 }}>Check in</h2>
+        <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub, marginBottom: 16, lineHeight: 1.5 }}>Enter what the statements actually say. Every projection re-bases on these numbers.</div>
+        <div style={finLabel}>Cadence</div>
+        <div style={{ marginBottom: 16 }}><Segmented small options={[{ v: "monthly", l: "Monthly" }, { v: "quarterly", l: "Quarterly" }]} value={cadence} onChange={setCadence} /></div>
+        {groups.map((g, gi) => {
+          const tt = groupTotals({ loans: g.loans.map((l) => ({ ...l, balance: num(l.balance), ratePct: num(l.ratePct), paymentMonthly: num(l.paymentMonthly) })) });
+          return (
+            <div key={g.id} style={{ marginBottom: 16 }}>
+              <div style={{ ...finLabel, marginBottom: 6 }}>{g.name}</div>
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontFamily: SANS, fontSize: 9.5, color: NEU.n600, marginBottom: 3 }}>Valuation</div>
+                <input value={g.valuation ?? ""} onChange={(e) => setG(gi, "valuation", e.target.value)} inputMode="decimal" style={{ ...finField, padding: "9px 11px", fontSize: 15 }} />
+              </div>
+              {g.loans.map((l, li) => (
+                <div key={l.id || li} style={{ background: C.page, borderRadius: 8, padding: 11, marginBottom: 7 }}>
+                  <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 500, color: C.ink, marginBottom: 7 }}>{l.name || `Loan ${li + 1}`}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 6 }}>
+                    {[["balance", "Balance"], ["ratePct", "Rate %"], ["paymentMonthly", "Per mo"]].map(([k, ph]) => (
+                      <div key={k}>
+                        <div style={{ fontFamily: SANS, fontSize: 9.5, color: NEU.n600, marginBottom: 3 }}>{ph}</div>
+                        <input value={l[k] ?? ""} onChange={(e) => setL(gi, li, k, e.target.value)} inputMode="decimal" style={{ ...finField, padding: "8px 9px", fontSize: 14 }} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {g.loans.length > 1 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, padding: "2px 2px 0" }}>Combined {money(tt.balance, fin.currency)} · {tt.avgRate.toFixed(2)}% weighted · {money(tt.payment, fin.currency)}/mo</div>}
+            </div>
+          );
+        })}
+        <div style={{ display: "flex", gap: 9 }}>
+          <button onClick={onClose} style={{ ...sheetBtn, border: `1px solid ${C.line}`, color: C.sub }}>Cancel</button>
+          <button onClick={() => onSave({ cadence, groups: groups.map((g) => ({ ...g, valuation: num(g.valuation), loans: g.loans.map((l) => ({ ...l, balance: num(l.balance), ratePct: num(l.ratePct), paymentMonthly: num(l.paymentMonthly) })) })) })} style={{ ...sheetBtn, border: `1px solid ${AC.base}`, color: ACC }}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Finance({ fin, setFin, onSettings }) {
+  const [sheet, setSheet] = useState(null);
+  const cur = fin.currency || "GBP";
+  const groups = fin.groups || [];
+  const home = groups.find((g) => g.kind === "home") || groups[0] || null;
+
+  const saveGroup = (id, patch) => setFin((f) => ({ ...f, groups: id ? f.groups.map((g) => (g.id === id ? { ...g, ...patch } : g)) : [...(f.groups || []), { id: `gp_${Date.now()}`, kind: (f.groups || []).length === 0 ? "home" : "other", goalMonths: null, overpayment: 0, ...patch }] }));
+  const removeGroup = (id) => setFin((f) => ({ ...f, groups: f.groups.filter((g) => g.id !== id) }));
+
+  const homeProj = home ? simulateLoans(home.loans || [], home.overpayment || 0) : null;
+  const freeDate = homeProj?.settles ? addMonths(new Date(), homeProj.months) : null;
+  const goalDate = home?.goalMonths ? addMonths(new Date(), home.goalMonths) : null;
+  const drift = freeDate && goalDate ? monthsBetween(goalDate, freeDate) : null;
+  const ht = home ? groupTotals(home) : null;
+  const equity = home && home.valuation ? home.valuation - ht.balance : null;
+  const equityPct = equity != null && home.valuation ? Math.round((equity / home.valuation) * 100) : null;
+
+  const nextDue = fin.lastUpdated ? addMonths(new Date(fin.lastUpdated), fin.cadence === "monthly" ? 1 : 3) : new Date();
+  const overdue = nextDue <= new Date();
+
+  const cell = { flex: 1, padding: "12px 13px", minWidth: 0 };
+  return (
+    <div style={{ padding: "6px 17px 24px" }}>
+      <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>
+        {fin.lastUpdated ? `Updated ${fmtDate(fin.lastUpdated)}` : "Not checked in yet"}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, margin: "8px 0 20px" }}>
+        <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.54 }}>Finance</h1>
+        <button onClick={onSettings} aria-label="Settings" style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 16, border: `1px solid ${AC.base}`, background: "none", color: ACC, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}><GearSix size={16} /></button>
+      </div>
+
+      {groups.length === 0 ? (
+        <Card style={{ padding: 26, textAlign: "center", marginBottom: 16 }}>
+          <div style={{ fontFamily: SANS, fontSize: 17, fontWeight: 500, color: C.ink, letterSpacing: -0.2 }}>No loans yet</div>
+          <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, margin: "7px 0 16px", lineHeight: 1.55 }}>Add a property and the loans against it. Everything here is worked out from the balances, rates and payments you enter.</div>
+          <button onClick={() => setSheet({ group: { loans: [{ id: `ln_${Date.now()}`, name: "Loan 1", balance: 0, ratePct: 0, paymentMonthly: 0 }] } })} style={{ height: 40, padding: "0 18px", borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer" }}>Add a loan</button>
+        </Card>
+      ) : (<>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "0 2px 8px" }}>
+          <Eyebrow>Your loans · tap to edit</Eyebrow>
+          <button onClick={() => setSheet({ group: { loans: [{ id: `ln_${Date.now()}`, name: "Loan 1", balance: 0, ratePct: 0, paymentMonthly: 0 }] } })} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: SANS, fontSize: 11.5, color: ACC, WebkitTapHighlightColor: "transparent" }}>+ Add a loan</button>
+        </div>
+        {groups.map((g) => {
+          const t = groupTotals(g), isHome = g.kind === "home";
+          return (
+            <button key={g.id} onClick={() => setSheet({ group: g })} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${isHome ? AC.a800 : C.line}`, borderRadius: 14, padding: "14px 15px", marginBottom: 9, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+              <div style={{ width: 38, height: 38, borderRadius: 8, background: C.page, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{isHome ? <Home size={18} color={ACC} /> : <Car size={18} color={C.sub} />}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 500, color: C.ink }}>{g.name}{t.count > 1 ? ` · ${t.count} loans` : ""}</div>
+                <div style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{t.avgRate.toFixed(2)}%{t.count > 1 ? " avg" : ""} · {money(t.payment, cur)}/mo</div>
+              </div>
+              <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{money(t.balance, cur)}</div>
+            </button>
+          );
+        })}
+
+        {home && (<>
+          <Card style={{ display: "flex", padding: 0, overflow: "hidden", margin: "16px 0 12px" }}>
+            <div style={{ ...cell, position: "relative", paddingLeft: 15 }}>
+              <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 2, background: AC.base }} />
+              <div style={{ fontFamily: SANS, fontSize: 9, fontWeight: 500, letterSpacing: 1.1, textTransform: "uppercase", color: NEU.n600, whiteSpace: "nowrap" }}>Mortgage free</div>
+              <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink, marginTop: 5, whiteSpace: "nowrap" }}>{freeDate ? monthLabel(freeDate) : "—"}</div>
+              {drift != null && <div style={{ fontFamily: SANS, fontSize: 10.5, color: drift > 0 ? C.amber : AC.a300, marginTop: 2, whiteSpace: "nowrap" }}>{drift === 0 ? "on goal" : drift > 0 ? `${drift}mo behind` : `${-drift}mo ahead`}</div>}
+            </div>
+            <div style={{ ...cell, borderLeft: `1px solid ${NEU.n900}` }}>
+              <div style={{ fontFamily: SANS, fontSize: 9, fontWeight: 500, letterSpacing: 1.1, textTransform: "uppercase", color: NEU.n600 }}>Interest</div>
+              <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink, marginTop: 5, fontVariantNumeric: "tabular-nums" }}>{money(homeProj.first.interest, cur)}</div>
+              <div style={{ fontFamily: SANS, fontSize: 10.5, color: NEU.n600, marginTop: 2 }}>this month</div>
+            </div>
+            <div style={{ ...cell, borderLeft: `1px solid ${NEU.n900}` }}>
+              <div style={{ fontFamily: SANS, fontSize: 9, fontWeight: 500, letterSpacing: 1.1, textTransform: "uppercase", color: NEU.n600 }}>Principal</div>
+              <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink, marginTop: 5, fontVariantNumeric: "tabular-nums" }}>{money(homeProj.first.principal, cur)}</div>
+              <div style={{ fontFamily: SANS, fontSize: 10.5, color: NEU.n600, marginTop: 2 }}>this month</div>
+            </div>
+          </Card>
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 18, padding: "0 2px" }}>
+            <span style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub, minWidth: 0 }}>{goalDate ? `Goal ${monthLabel(goalDate)} · ${home.name}` : `No goal set for ${home.name}`}</span>
+            <button onClick={() => setSheet({ goal: home })} style={{ height: 28, padding: "0 12px", borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 12, fontWeight: 500, cursor: "pointer", flexShrink: 0, WebkitTapHighlightColor: "transparent" }}>{goalDate ? "Update goal" : "Set goal"}</button>
+          </div>
+
+          {equity != null && home.valuation > 0 && (<>
+            <Eyebrow>Your equity</Eyebrow>
+            <Card style={{ padding: 16, margin: "8px 0 18px" }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+                <span style={{ fontFamily: SANS, fontSize: 24, fontWeight: 500, color: C.ink, fontVariantNumeric: "tabular-nums", letterSpacing: -0.4 }}>{money(equity, cur)}</span>
+                <span style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600 }}>{equityPct}% of {moneyShort(home.valuation, cur)}</span>
+              </div>
+              <div style={{ display: "flex", height: 4, borderRadius: 2, overflow: "hidden", background: NEU.n900, marginTop: 12 }}>
+                <div style={{ width: `${Math.max(0, Math.min(100, equityPct))}%`, background: AC.base }} />
+              </div>
+            </Card>
+          </>)}
+        </>)}
+
+        <button onClick={() => setSheet("update")} style={{ display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${overdue ? AC.a800 : C.line}`, borderRadius: 14, padding: "14px 15px", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+          <Bell size={17} color={overdue ? ACC : C.faint} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 500, color: C.ink }}>{overdue ? `${fin.cadence === "monthly" ? "Monthly" : "Quarterly"} update due` : "Next check-in"}</div>
+            <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 2 }}>{monthLabel(nextDue)} · valuation, balance, rate</div>
+          </div>
+          <span style={{ height: 28, padding: "0 12px", borderRadius: 8, border: `1px solid ${AC.base}`, color: ACC, fontFamily: SANS, fontSize: 12, fontWeight: 500, display: "flex", alignItems: "center", flexShrink: 0 }}>Update</span>
+        </button>
+      </>)}
+
+      {sheet === "update" && <QuarterlyUpdateSheet fin={fin} onClose={() => setSheet(null)}
+        onSave={({ cadence, groups: gs }) => { setFin((f) => ({ ...f, cadence, groups: gs, lastUpdated: new Date().toISOString() })); setSheet(null); }} />}
+      {sheet?.goal && <GoalSheet group={sheet.goal} currency={cur} onClose={() => setSheet(null)}
+        onSave={(m) => { saveGroup(sheet.goal.id, { goalMonths: m }); setSheet(null); }} />}
+      {sheet?.group && <LoanSheet group={sheet.group} currency={cur} onClose={() => setSheet(null)}
+        onSave={(patch) => { saveGroup(sheet.group.id, patch); if (!fin.lastUpdated) setFin((f) => ({ ...f, lastUpdated: new Date().toISOString() })); setSheet(null); }}
+        onDelete={() => { removeGroup(sheet.group.id); setSheet(null); }} />}
+    </div>
+  );
+}
+
+/* ================================================================
    PILLARS — the five lifestyle modules. Train ships first; the rest are
    visible but locked. Adding one later is a `locked: false` flip plus a
    render line, not a shell rewrite.
@@ -2437,7 +2819,7 @@ const PILLARS = [
   { id: "train", label: "Train", Icon: Dumbbell },
   { id: "read", label: "Read", Icon: BookOpen },
   { id: "habits", label: "Habits", Icon: Target },
-  { id: "finance", label: "Finance", Icon: Wallet, locked: true, blurb: "Budgets, savings and your mortgage will live here." },
+  { id: "finance", label: "Finance", Icon: Wallet },
 ];
 // screens reachable by `go()` but with no tab of their own — they light up their parent pillar
 const TAB_PARENT = { programs: "train" };
@@ -2466,6 +2848,7 @@ export default function App() {
   const [equipment, setEquipment] = usePersist("wa_equipment", DEFAULT_EQUIPMENT);
   const [habits, setHabits] = usePersist("wa_habits", []);
   const [read, setRead] = usePersist("wa_read", READ_DEFAULT);
+  const [fin, setFin] = usePersist("wa_finance", FIN_DEFAULT);
   const [tab, setTab] = useState("today");
   const [settingsOpen, setSettingsOpen] = useState(false);
   // one-time cleanup: drop the old auto-seeded p1/p2/p3 defaults if they were never actually started
@@ -2475,7 +2858,7 @@ export default function App() {
 
   const finishSession = (session, updatedDays, readiness) => { setPrograms((ps) => ps.map((p) => p.id === session.programId ? { ...p, days: updatedDays, lastReadiness: readiness } : p)); setHistory((h) => [...h, session]); };
   const reorderSchedule = (id, scheduleDays) => setPrograms((ps) => ps.map((p) => p.id === id ? { ...p, scheduleDays } : p));
-  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment", "wa_habits", "wa_read"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setHabits([]); setRead(READ_DEFAULT); setProfile({ onboarded: false }); setTab("today"); setSettingsOpen(false); };
+  const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment", "wa_habits", "wa_read", "wa_finance"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setHabits([]); setRead(READ_DEFAULT); setFin(FIN_DEFAULT); setProfile({ onboarded: false }); setTab("today"); setSettingsOpen(false); };
 
   const pillar = PILLARS.find((p) => p.id === tab);
   const navId = TAB_PARENT[tab] ?? tab;
@@ -2488,6 +2871,7 @@ export default function App() {
           {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} habits={habits} setHabits={setHabits} read={read} go={setTab} onSettings={openSettings} />}
           {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} onReorderSchedule={reorderSchedule} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
           {tab === "read" && <Read read={read} setRead={setRead} />}
+          {tab === "finance" && <Finance fin={fin} setFin={setFin} onSettings={openSettings} />}
           {tab === "habits" && <Habits habits={habits} setHabits={setHabits} />}
           {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} go={setTab} />}
         </div>
@@ -2502,7 +2886,7 @@ export default function App() {
             </button>); })}
         </div>
       </div>
-      {settingsOpen && <SettingsSheet profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} equipment={equipment} setEquipment={setEquipment} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsSheet profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} equipment={equipment} setEquipment={setEquipment} fin={fin} setFin={setFin} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
