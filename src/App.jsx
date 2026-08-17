@@ -2458,7 +2458,7 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
 ================================================================ */
 const HEAT_LEGEND = [NEU.n900, AC.a800, AC.a700, AC.base];
 
-function HeatGrid({ habits, weeks, onCellTap }) {
+function HeatGrid({ habits, weeks, onPickDay, selKey }) {
   const end = startOfDay(new Date());
   const start = addDays(mondayOf(end), -(weeks - 1) * 7);
   const cells = Array.from({ length: weeks * 7 }).map((_, i) => {
@@ -2467,9 +2467,17 @@ function HeatGrid({ habits, weeks, onCellTap }) {
   });
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 5 }}>
-      {cells.map((c) => (
-        <div key={c.key} onClick={onCellTap} style={{ aspectRatio: "1", borderRadius: 3, background: c.future ? "transparent" : heatColor(c.pct), border: c.future ? `1px solid ${NEU.n900}` : "none", outline: c.isToday ? `1px solid ${AC.a300}` : "none", outlineOffset: 1, cursor: onCellTap ? "pointer" : "default" }} />
-      ))}
+      {cells.map((c) => {
+        const sel = c.key === selKey && !c.isToday;
+        return (
+          <button key={c.key} onClick={c.future || !onPickDay ? undefined : () => onPickDay(c.key)}
+            aria-label={`${c.dt.getDate()} ${MON[c.dt.getMonth()]}${c.pct != null ? ` — ${c.pct}%` : ""}`}
+            style={{ padding: 0, aspectRatio: "1", borderRadius: 3, background: c.future ? "transparent" : heatColor(c.pct),
+              border: c.future ? `1px solid ${NEU.n900}` : "none",
+              outline: c.isToday ? `1px solid ${AC.a300}` : sel ? `1px solid ${NEU.n400}` : "none", outlineOffset: 1,
+              cursor: c.future || !onPickDay ? "default" : "pointer", WebkitTapHighlightColor: "transparent" }} />
+        );
+      })}
     </div>
   );
 }
@@ -2564,12 +2572,19 @@ function MonthHistorySheet({ habits, onClose }) {
 function Habits({ habits, setHabits }) {
   const [sheet, setSheet] = useState(null); // {habit} | "month"
   const todayKey = ymd(new Date());
-  const active = habitsOn(habits, todayKey);
-  const doneToday = active.filter((h) => habitState(h, todayKey) === HABIT_GREEN).length;
-  const countedToday = active.filter((h) => habitCounts(habitState(h, todayKey))).length;
+  const [selKey, setSelKey] = useState(todayKey);
+  const selDate = startOfDay(new Date(selKey));
+  const isToday = selKey === todayKey;
+  // Future days cannot be marked — you have not had the chance to do them yet.
+  const shiftDay = (n) => { const d = addDays(selDate, n); if (startOfDay(d) > startOfDay(new Date())) return; setSelKey(ymd(d)); };
+  // Only habits that existed on the selected day are markable on it.
+  const active = habitsOn(habits, selKey);
+  const doneToday = active.filter((h) => habitState(h, selKey) === HABIT_GREEN).length;
+  const countedToday = active.filter((h) => habitCounts(habitState(h, selKey))).length;
   // Tapping cycles unmarked -> green -> orange -> red -> unmarked, so every state is
-  // reachable with repeat taps and nothing needs a long-press or a menu.
-  const cycle = (id) => cycleHabitOn(setHabits, id, todayKey);
+  // reachable with repeat taps and nothing needs a long-press or a menu. Marks whichever
+  // day is selected, so a day you forgot can be filled in after the fact.
+  const cycle = (id) => cycleHabitOn(setHabits, id, selKey);
   const save = (id, patch) => setHabits((hs) => id ? hs.map((h) => h.id === id ? { ...h, ...patch } : h) : [...hs, { id: `hb_${Date.now()}`, createdAt: new Date().toISOString(), ticks: {}, visibleToFriends: false, ...patch }]);
   const remove = (id) => setHabits((hs) => hs.filter((h) => h.id !== id));
 
@@ -2580,11 +2595,23 @@ function Habits({ habits, setHabits }) {
   return (
     <div style={{ padding: "6px 17px 24px" }}>
       <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>
-        {active.length ? `${doneToday} of ${countedToday} done today${countedToday < active.length ? ` · ${active.length - countedToday} not counting` : ""}` : "Nothing tracked yet"}
+        {active.length ? `${doneToday} of ${countedToday} done${countedToday < active.length ? ` · ${active.length - countedToday} not counting` : ""}` : "Nothing tracked yet"}
       </div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, margin: "8px 0 20px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, margin: "8px 0 14px" }}>
         <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.54 }}>Habits</h1>
         <button onClick={() => setSheet({ habit: {} })} aria-label="New habit" style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 16, border: `1px solid ${AC.base}`, background: "none", color: ACC, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}><Plus size={17} /></button>
+      </div>
+
+      {/* Day picker. Forgetting to mark a day is normal, so any past day can be filled in. */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12, padding: "0 2px" }}>
+        <button onClick={() => shiftDay(-1)} aria-label="Previous day" style={{ ...miniRound, width: 30, height: 30 }}><ChevronLeft size={15} /></button>
+        <div style={{ textAlign: "center", minWidth: 0 }}>
+          <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 500, color: isToday ? C.ink : AC.a300, whiteSpace: "nowrap" }}>
+            {isToday ? "Today" : `${WD_LONG[selDate.getDay()]} ${selDate.getDate()} ${MON[selDate.getMonth()]}`}
+          </div>
+          {!isToday && <button onClick={() => setSelKey(todayKey)} style={{ background: "none", border: "none", padding: 0, marginTop: 1, cursor: "pointer", fontFamily: SANS, fontSize: 11, color: NEU.n600, WebkitTapHighlightColor: "transparent" }}>Back to today</button>}
+        </div>
+        <button onClick={() => shiftDay(1)} aria-label="Next day" disabled={isToday} style={{ ...miniRound, width: 30, height: 30, opacity: isToday ? 0.35 : 1, cursor: isToday ? "default" : "pointer" }}><ChevronRight size={15} /></button>
       </div>
 
       {active.length === 0 ? (
@@ -2596,7 +2623,7 @@ function Habits({ habits, setHabits }) {
       ) : (
         <Card style={{ padding: "4px 15px", marginBottom: 18 }}>
           {active.map((h, i) => {
-            const st = habitState(h, todayKey), streak = habitStreak(h);
+            const st = habitState(h, selKey), streak = habitStreak(h);
             const dim = st === HABIT_GREEN || st === HABIT_RED;
             const label = habitStateLabel(st);
             return (
@@ -2625,10 +2652,16 @@ function Habits({ habits, setHabits }) {
 
       {habits.length > 0 && (<>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "0 2px 8px" }}>
-          <Eyebrow>Last 3 weeks</Eyebrow><HeatLegend />
+          <Eyebrow>Last 3 weeks</Eyebrow>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <HeatLegend />
+            <button onClick={() => setSheet("month")} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: SANS, fontSize: 11, color: ACC, WebkitTapHighlightColor: "transparent" }}>History</button>
+          </div>
         </div>
         <Card style={{ padding: 14 }}>
-          <HeatGrid habits={habits} weeks={3} onCellTap={() => setSheet("month")} />
+          {/* Tapping a square jumps the checklist above to that day, which is the quickest
+              route to a day you forgot. */}
+          <HeatGrid habits={habits} weeks={3} selKey={selKey} onPickDay={setSelKey} />
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}` }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 500, color: ahead == null ? C.sub : ahead >= 0 ? AC.a300 : C.sub }}>
