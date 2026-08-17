@@ -33,6 +33,7 @@ import { progressionOf } from "./lib/progression";
 import { calcPlateLoad, DEFAULT_EQUIPMENT } from "./lib/plates";
 import { supabase, syncConfigured } from "./lib/supabase";
 import { syncNow, push as pushSync } from "./lib/sync";
+import * as Friends from "./lib/friends";
 
 /* ===== TOKENS — Nocturne (dark) =====
    Sourced from the design handoff's styles.css. The semantic green/amber/red scale
@@ -182,6 +183,51 @@ function useSync() {
   }, [user, run]);
 
   return { configured: syncConfigured, user, status, lastSync, error, run };
+}
+
+/* ===== friends =====
+   Publishes a deliberately small slice: a monthly percentage covering only the habits you
+   marked visible, and the quotes you chose to write down. Names, daily records, training,
+   weight and finance are never sent. */
+function useFriends(sync, habits, read, profile) {
+  const [friends, setFriends] = useState([]);
+  const [incoming, setIncoming] = useState([]);
+  const [sent, setSent] = useState([]);
+  const [quotes, setQuotes] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const user = sync?.user || null;
+
+  const refresh = useCallback(async () => {
+    if (!user) { setFriends([]); setIncoming([]); setSent([]); setQuotes([]); return; }
+    setBusy(true);
+    const [f, i, s] = await Promise.all([Friends.listFriends(user), Friends.listIncomingInvites(user), Friends.listSentInvites(user)]);
+    const list = f.ok ? f.data : [];
+    const withStats = await Friends.fetchFriendStats(user, list);
+    setFriends(withStats.ok ? withStats.data : list);
+    setIncoming(i.ok ? i.data : []);
+    setSent(s.ok ? s.data : []);
+    const q = await Friends.fetchFriendQuotes(user, list);
+    setQuotes(q.ok ? q.data : []);
+    setBusy(false);
+  }, [user]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // Keep your published slice current. Only visible habits count towards the percentage,
+  // so turning one off genuinely removes it from what friends see.
+  useEffect(() => {
+    if (!user) return;
+    const shared = (habits || []).filter((h) => h.visibleToFriends);
+    const month = ymd(new Date()).slice(0, 7);
+    const stats = shared.length ? habitMonthStats(shared, new Date()) : { pct: null };
+    const streak = shared.length ? Math.max(0, ...shared.map((h) => habitStreak(h))) : 0;
+    Friends.ensureProfile(user, profile?.name);
+    Friends.publishStats(user, { month, pct: stats.pct ?? 0, count: shared.length, streak });
+  }, [user, habits, profile?.name]);
+
+  useEffect(() => { if (user) Friends.publishQuotes(user, read?.quotes || []); }, [user, read?.quotes]);
+
+  return { user, friends, incoming, sent, quotes, busy, refresh };
 }
 
 const timeAgo = (iso) => {
@@ -2269,7 +2315,84 @@ function Picker({ inDay, onToggle, onBack, dayName }) {
    SETTINGS — a bottom sheet off the Today avatar, not a tab of its own
 ================================================================ */
 const cmToFtIn = (cm) => { const t = cm / 2.54; const f = Math.floor(t / 12); const i = Math.round(t - f * 12); return `${f}'${i}"`; };
-function SettingsSheet({ profile, setProfile, programs, history, weightLog, onReset, equipment, setEquipment, fin, setFin, sync, onClose }) {
+function FriendsSheet({ friendsApi, onClose }) {
+  const { user, friends, incoming, sent, refresh } = friendsApi;
+  const [email, setEmail] = useState("");
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const run = async (fn, okText) => { setBusy(true); setMsg(null); const r = await fn(); setBusy(false); setMsg(r.ok ? { text: okText } : { bad: true, text: r.reason }); await refresh(); };
+  const row = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "11px 0", borderBottom: `1px solid ${C.lineSoft}` };
+  const small = { height: 30, padding: "0 11px", borderRadius: 8, background: "none", fontFamily: SANS, fontSize: 12.5, fontWeight: 500, cursor: "pointer", flexShrink: 0, WebkitTapHighlightColor: "transparent" };
+  return (
+    <div onClick={onClose} style={sheetScrim}>
+      <div onClick={(e) => e.stopPropagation()} style={sheetShell}>
+        <div style={grabHandle} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <h2 style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.3 }}>Friends</h2>
+          <button onClick={onClose} style={miniRound}><X size={17} /></button>
+        </div>
+        <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub, lineHeight: 1.55, marginBottom: 16 }}>
+          Friends see the percentage of your visible habits hit this month, and any quotes you write down. They never see your training, your weight or your finances.
+        </div>
+
+        <div style={finLabel}>Invite by email</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="off" placeholder="them@example.com" style={{ ...finField, flex: 1 }} />
+          <button disabled={busy || !email.trim()} onClick={() => run(() => Friends.sendInvite(user, email), "Invite sent. It waits until they sign in.").then(() => setEmail(""))}
+            style={{ ...small, height: 44, padding: "0 15px", border: `1px solid ${email.trim() ? AC.base : C.line}`, color: email.trim() ? ACC : C.faint }}>Invite</button>
+        </div>
+        {msg && <div style={{ fontFamily: SANS, fontSize: 12.5, color: msg.bad ? C.red : C.green, marginBottom: 12, lineHeight: 1.45 }}>{msg.text}</div>}
+
+        {incoming.length > 0 && (<>
+          <div style={{ ...finLabel, marginTop: 14 }}>Waiting for you</div>
+          {incoming.map((iv) => (
+            <div key={iv.id} style={row}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{iv.name}</div>
+                <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 2 }}>invited you {timeAgo(iv.created_at)}</div>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <button disabled={busy} onClick={() => run(() => Friends.declineInvite(iv), "Invite declined.")} style={{ ...small, border: `1px solid ${C.line}`, color: C.sub }}>Decline</button>
+                <button disabled={busy} onClick={() => run(() => Friends.acceptInvite(user, iv), "Connected.")} style={{ ...small, border: `1px solid ${AC.base}`, color: ACC }}>Accept</button>
+              </div>
+            </div>
+          ))}
+        </>)}
+
+        <div style={{ ...finLabel, marginTop: 16 }}>Connected{friends.length ? ` · ${friends.length}` : ""}</div>
+        {friends.length === 0 ? (
+          <div style={{ fontFamily: SANS, fontSize: 13, color: NEU.n600, padding: "6px 0 4px", lineHeight: 1.5 }}>Nobody yet. An invite only becomes a connection once they accept it.</div>
+        ) : friends.map((f) => (
+          <div key={f.id} style={row}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+              <div style={{ width: 30, height: 30, flexShrink: 0, borderRadius: 15, border: `1px solid ${AC.a800}`, background: AC.a900, color: NEU.n200, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 12 }}>{(f.name || "?").trim().charAt(0).toUpperCase()}</div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</div>
+                <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 2 }}>sees your habits and quotes</div>
+              </div>
+            </div>
+            <button disabled={busy} onClick={() => run(() => Friends.removeFriend(f.id), "Removed.")} style={{ ...small, border: `1px solid ${C.line}`, color: C.sub }}>Remove</button>
+          </div>
+        ))}
+
+        {sent.length > 0 && (<>
+          <div style={{ ...finLabel, marginTop: 16 }}>Invited</div>
+          {sent.map((iv) => (
+            <div key={iv.id} style={row}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{iv.email}</div>
+                <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 2 }}>sent {timeAgo(iv.created_at)} · not accepted yet</div>
+              </div>
+              <button disabled={busy} onClick={() => run(() => Friends.cancelInvite(iv), "Invite withdrawn.")} style={{ ...small, border: `1px solid ${C.line}`, color: C.sub }}>Cancel</button>
+            </div>
+          ))}
+        </>)}
+      </div>
+    </div>
+  );
+}
+
+function SettingsSheet({ profile, setProfile, programs, history, weightLog, onReset, equipment, setEquipment, fin, setFin, sync, friendsApi, onClose }) {
   const [view, setView] = useState("main");
   const [confirmReset, setConfirmReset] = useState(false);
   const [editingEquip, setEditingEquip] = useState(false);
@@ -2281,6 +2404,7 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
   const [authPw, setAuthPw] = useState("");
   const [authMsg, setAuthMsg] = useState(null);
   const [authBusy, setAuthBusy] = useState(false);
+  const [friendsOpen, setFriendsOpen] = useState(false);
   const setP = (k, v) => setProfile((p) => ({ ...p, [k]: v }));
   const u = profile.unit;
   const active = activeProgram(programs);
@@ -2372,7 +2496,14 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
               </div>
               <button onClick={sync.run} disabled={sync.status === "syncing"} style={{ height: 34, padding: "0 13px", borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 13, fontWeight: 500, cursor: "pointer", flexShrink: 0 }}>Sync now</button>
             </div>
-            <button onClick={async () => { await supabase.auth.signOut(); }} style={{ marginTop: 14, height: 38, width: "100%", borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 13.5, cursor: "pointer" }}>Sign out</button>
+            <button onClick={() => setFriendsOpen(true)} style={{ marginTop: 12, height: 38, width: "100%", borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.ink, fontFamily: SANS, fontSize: 13.5, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 13px", WebkitTapHighlightColor: "transparent" }}>
+              <span>Friends</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, color: NEU.n600, fontSize: 12.5 }}>
+                {friendsApi.incoming.length > 0 && <span style={{ color: ACC }}>{friendsApi.incoming.length} waiting</span>}
+                {friendsApi.friends.length || "none"}<ChevronRight size={14} />
+              </span>
+            </button>
+            <button onClick={async () => { await supabase.auth.signOut(); }} style={{ marginTop: 8, height: 38, width: "100%", borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 13.5, cursor: "pointer" }}>Sign out</button>
             <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 12, lineHeight: 1.5 }}>Your data stays on this device and works offline. Signing out leaves it here — it does not delete anything.</div>
           </>) : (<>
             <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, lineHeight: 1.55, marginBottom: 13 }}>Sign in to keep your history on more than one device. Everything keeps working offline either way.</div>
@@ -2445,6 +2576,7 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
       <Card style={{ padding: "4px 16px" }}><Row label="Version" last><span style={{ fontFamily: MONO, fontSize: 14, color: C.sub }}>1.0.0 · prototype</span></Row></Card>
         </>)}
         {editingEquip && <EquipmentManager equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setEditingEquip(false)} />}
+        {friendsOpen && <FriendsSheet friendsApi={friendsApi} onClose={() => setFriendsOpen(false)} />}
       </div>
     </div>
   );
@@ -2493,6 +2625,7 @@ const HeatLegend = () => (
 function HabitSheet({ habit, onSave, onDelete, onClose }) {
   const [name, setName] = useState(habit.name || "");
   const [detail, setDetail] = useState(habit.detail || "");
+  const [visible, setVisible] = useState(!!habit.visibleToFriends);
   const [confirmDel, setConfirmDel] = useState(false);
   const field = { width: "100%", background: C.page, border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 13px", fontFamily: SANS, fontSize: 15, color: C.ink, outline: "none" };
   const btn = { flex: 1, height: 44, borderRadius: 8, background: "none", cursor: "pointer", fontFamily: SANS, fontSize: 14.5, fontWeight: 500, WebkitTapHighlightColor: "transparent" };
@@ -2504,6 +2637,19 @@ function HabitSheet({ habit, onSave, onDelete, onClose }) {
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Habit name" style={{ ...field, fontSize: 17, marginBottom: 14 }} />
         <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, marginBottom: 6 }}>Details</div>
         <textarea value={detail} onChange={(e) => setDetail(e.target.value)} rows={3} placeholder="What does doing this actually look like?" style={{ ...field, resize: "none", lineHeight: 1.5, marginBottom: 16 }} />
+        {/* Off unless you say otherwise, and the current state written out rather than left
+            to the reader to infer from a switch position. */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: C.page, borderRadius: 8, padding: "12px 13px", marginBottom: 16 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>Visible to friends</div>
+            <div style={{ fontFamily: SANS, fontSize: 11.5, color: visible ? AC.a300 : NEU.n600, marginTop: 3, lineHeight: 1.45 }}>
+              {visible
+                ? "Counted in the monthly percentage your friends see. The name and your day-by-day record stay private."
+                : "Off. Nothing about this habit leaves your device."}
+            </div>
+          </div>
+          <Switch on={visible} onToggle={() => setVisible((v) => !v)} />
+        </div>
         {habit.id && (confirmDel ? (
           <div style={{ background: C.redBg, borderRadius: 8, padding: 13, marginBottom: 16 }}>
             <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink, lineHeight: 1.5, marginBottom: 10 }}>Delete this habit and its history? This cannot be undone.</div>
@@ -2517,7 +2663,7 @@ function HabitSheet({ habit, onSave, onDelete, onClose }) {
         ))}
         <div style={{ display: "flex", gap: 9 }}>
           <button onClick={onClose} style={{ ...btn, border: `1px solid ${C.line}`, color: C.sub }}>Cancel</button>
-          <button onClick={() => name.trim() && onSave({ name: name.trim(), detail: detail.trim() })} style={{ ...btn, border: `1px solid ${name.trim() ? AC.base : C.line}`, color: name.trim() ? ACC : C.faint }}>Save</button>
+          <button onClick={() => name.trim() && onSave({ name: name.trim(), detail: detail.trim(), visibleToFriends: visible })} style={{ ...btn, border: `1px solid ${name.trim() ? AC.base : C.line}`, color: name.trim() ? ACC : C.faint }}>Save</button>
         </div>
       </div>
     </div>
@@ -2569,7 +2715,7 @@ function MonthHistorySheet({ habits, onClose }) {
   );
 }
 
-function Habits({ habits, setHabits }) {
+function Habits({ habits, setHabits, friendsApi }) {
   const [sheet, setSheet] = useState(null); // {habit} | "month"
   const todayKey = ymd(new Date());
   const [selKey, setSelKey] = useState(todayKey);
@@ -2679,6 +2825,33 @@ function Habits({ habits, setHabits }) {
         </Card>
       </>)}
 
+      {/* Ranked on the shared percentage only. Nobody's habit names or daily record travel. */}
+      {friendsApi?.friends?.length > 0 && (() => {
+        const mine = habits.filter((h) => h.visibleToFriends);
+        const myPct = mine.length ? (habitMonthStats(mine, new Date()).pct ?? 0) : null;
+        const rows = [
+          ...friendsApi.friends.filter((f) => f.stats).map((f) => ({ id: f.userId, name: f.name, pct: f.stats.habit_pct ?? 0 })),
+          ...(myPct != null ? [{ id: "me", name: "You", pct: myPct, me: true }] : []),
+        ].sort((a, b) => b.pct - a.pct);
+        if (!rows.length) return null;
+        return (<>
+          <SectionLabel>Friends · habits hit this month</SectionLabel>
+          <Card style={{ padding: "6px 14px 10px", marginTop: 8 }}>
+            {rows.map((r, i) => (
+              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 8px", margin: "2px -8px", borderRadius: 8, background: r.me ? AC.a900 : "transparent" }}>
+                <span style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, width: 14, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{i + 1}</span>
+                <span style={{ fontFamily: SANS, fontSize: 13, color: C.ink, width: 62, flexShrink: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</span>
+                <div style={{ flex: 1, height: 4, borderRadius: 2, background: NEU.n900, overflow: "hidden" }}>
+                  <div style={{ width: `${Math.max(0, Math.min(100, r.pct))}%`, height: "100%", background: r.me ? AC.base : NEU.n700 }} />
+                </div>
+                <span style={{ fontFamily: SANS, fontSize: 12.5, color: r.me ? AC.a300 : NEU.n600, fontWeight: r.me ? 500 : 400, width: 34, textAlign: "right", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{r.pct}%</span>
+              </div>
+            ))}
+            {mine.length === 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, padding: "8px 0 2px", lineHeight: 1.5 }}>None of your habits are shared yet. Open one and turn on "Visible to friends" to appear here.</div>}
+          </Card>
+        </>);
+      })()}
+
       {sheet === "month" && <MonthHistorySheet habits={habits} onClose={() => setSheet(null)} />}
       {sheet && sheet !== "month" && (
         <HabitSheet habit={sheet.habit}
@@ -2730,7 +2903,7 @@ function TagSheet({ quotes, current, onPick, onClose }) {
   );
 }
 
-function Read({ read, setRead }) {
+function Read({ read, setRead, friendsApi }) {
   const [draftQuote, setDraftQuote] = useState("");
   const [draftSource, setDraftSource] = useState("");
   const [draftTag, setDraftTag] = useState(null);
@@ -2816,6 +2989,24 @@ function Read({ read, setRead }) {
       </div>
 
       {/* LIBRARY */}
+      {/* Quotes are never truncated — the whole point is reading what they kept. */}
+      {friendsApi?.quotes?.length > 0 && (<>
+        <SectionLabel icon={<Quotes size={13} />}>Friends · last quote written down</SectionLabel>
+        <div style={{ display: "flex", gap: 9, overflowX: "auto", scrollSnapType: "x mandatory", margin: "8px -17px 18px", padding: "0 17px 2px", scrollbarWidth: "none" }}>
+          {friendsApi.quotes.map((q) => (
+            <div key={q.id} style={{ scrollSnapAlign: "start", flexShrink: 0, width: 246, background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <div style={{ width: 24, height: 24, borderRadius: 12, border: `1px solid ${AC.a800}`, background: AC.a900, color: NEU.n200, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 10.5, flexShrink: 0 }}>{(q.name || "?").trim().charAt(0).toUpperCase()}</div>
+                <span style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.name}</span>
+                <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, flexShrink: 0, marginLeft: "auto" }}>{timeAgo(q.created_at)}</span>
+              </div>
+              <div style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, color: C.ink }}>{q.text}</div>
+              {q.source && <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 9 }}>{q.source}</div>}
+            </div>
+          ))}
+        </div>
+      </>)}
+
       <SectionLabel>Your library</SectionLabel>
       {quotes.length === 0 ? (
         <Card style={{ padding: 24, textAlign: "center" }}>
@@ -3205,6 +3396,8 @@ export default function App() {
   const [habits, setHabits] = usePersist("wa_habits", []);
   const [read, setRead] = usePersist("wa_read", READ_DEFAULT);
   const [fin, setFin] = usePersist("wa_finance", FIN_DEFAULT);
+  // after the state it reads, or it would touch these bindings before they exist
+  const friendsApi = useFriends(sync, habits, read, profile);
   const [tab, setTab] = useState("today");
   const [settingsOpen, setSettingsOpen] = useState(false);
   // one-time cleanup: drop the old auto-seeded p1/p2/p3 defaults if they were never actually started
@@ -3226,9 +3419,9 @@ export default function App() {
           {pillar?.locked && <LockedScreen label={pillar.label} Icon={pillar.Icon} blurb={pillar.blurb} />}
           {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} habits={habits} setHabits={setHabits} read={read} go={setTab} onSettings={openSettings} />}
           {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} onReorderSchedule={reorderSchedule} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
-          {tab === "read" && <Read read={read} setRead={setRead} />}
+          {tab === "read" && <Read read={read} setRead={setRead} friendsApi={friendsApi} />}
           {tab === "finance" && <Finance fin={fin} setFin={setFin} onSettings={openSettings} />}
-          {tab === "habits" && <Habits habits={habits} setHabits={setHabits} />}
+          {tab === "habits" && <Habits habits={habits} setHabits={setHabits} friendsApi={friendsApi} />}
           {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} go={setTab} />}
         </div>
         <div style={{ flexShrink: 0, background: "rgba(22,24,38,0.92)", backdropFilter: "blur(12px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "8px 8px max(22px, env(safe-area-inset-bottom))" }}>
@@ -3242,7 +3435,7 @@ export default function App() {
             </button>); })}
         </div>
       </div>
-      {settingsOpen && <SettingsSheet profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} equipment={equipment} setEquipment={setEquipment} fin={fin} setFin={setFin} sync={sync} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsSheet profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} equipment={equipment} setEquipment={setEquipment} fin={fin} setFin={setFin} sync={sync} friendsApi={friendsApi} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
