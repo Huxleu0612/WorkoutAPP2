@@ -295,10 +295,29 @@ function assignedIdx(program, date) {
 }
 const weekKeysOf = (d) => { const m = mondayOf(d); return Array.from({ length: 7 }).map((_, i) => ymd(addDays(m, i))); };
 const matchesWorkout = (h, ai) => (h.dayIdx != null ? h.dayIdx === ai : h.dayName === wLabel(ai));
-function sessionForWorkout(history, program, date, ai) {
-  if (!program || ai == null) return null;
+// Which logged session belongs to which scheduled day, for the week containing `date`.
+// Matching is by week rather than exact date so training Monday's session on Tuesday still
+// counts for Monday. But a session must only ever claim one slot: on a schedule like
+// StrongLifts A/B/A across Mon/Wed/Fri, a single Workout A used to tick off both Monday and
+// Friday — including Fridays that had not happened yet.
+// Exact-date matches are assigned first so a session always lands on its own day when it can.
+function weekSessionSlots(history, program, date) {
+  const slots = new Map();
+  if (!program || !(program.scheduleDays || []).length || !(program.days || []).length) return slots;
   const keys = weekKeysOf(date);
-  return history.find((h) => h.programId === program.id && keys.includes(h.date) && matchesWorkout(h, ai)) || null;
+  const pool = history
+    .filter((h) => h.programId === program.id && keys.includes(h.date))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const used = new Set();
+  const scheduled = keys.map((k) => ({ k, ai: assignedIdx(program, new Date(k)) })).filter((s) => s.ai != null);
+  const claim = (exactOnly) => scheduled.forEach(({ k, ai }) => {
+    if (slots.has(k)) return;
+    const i = pool.findIndex((h, j) => !used.has(j) && matchesWorkout(h, ai) && (!exactOnly || h.date === k));
+    if (i !== -1) { used.add(i); slots.set(k, pool[i]); }
+  });
+  claim(true);
+  claim(false);
+  return slots;
 }
 // how many scheduled sessions should have happened by today (pause-aware)
 function scheduledSoFar(p) {
@@ -315,9 +334,10 @@ function scheduledSoFar(p) {
    SHARED UI
 ================================================================ */
 const Card = ({ children, style }) => <div style={{ background: C.card, borderRadius: 14, border: `1px solid ${C.line}`, ...style }}>{children}</div>;
-const Eyebrow = ({ children, dark }) => <div style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: 1.6, textTransform: "uppercase", color: dark ? C.onDarkSub : C.faint, fontWeight: 500 }}>{children}</div>;
-const PageTitle = ({ children, sub }) => (<>{sub && <Eyebrow>{sub}</Eyebrow>}<h1 style={{ fontFamily: SANS, fontSize: 30, fontWeight: 700, color: C.ink, margin: "4px 0 20px", letterSpacing: -0.7 }}>{children}</h1></>);
-const SectionLabel = ({ children, icon }) => <div style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: 1.5, textTransform: "uppercase", color: C.faint, fontWeight: 500, margin: "0 4px 8px", display: "flex", alignItems: "center", gap: 6 }}>{icon}{children}</div>;
+// Nocturne sets kickers in Inter, not mono, and caps headings at weight 500.
+const Eyebrow = ({ children, dark }) => <div style={{ fontFamily: SANS, fontSize: 10, letterSpacing: 1.6, textTransform: "uppercase", color: dark ? C.onDarkSub : NEU.n500, fontWeight: 500 }}>{children}</div>;
+const PageTitle = ({ children, sub }) => (<>{sub && <Eyebrow>{sub}</Eyebrow>}<h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: "8px 0 20px", letterSpacing: -0.54 }}>{children}</h1></>);
+const SectionLabel = ({ children, icon }) => <div style={{ fontFamily: SANS, fontSize: 10, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, fontWeight: 500, margin: "0 4px 8px", display: "flex", alignItems: "center", gap: 6 }}>{icon}{children}</div>;
 const BigButton = ({ children, onClick, tone = "acc", disabled }) => {
   const map = { acc: [ACC, C.page], dark: [C.line, C.ink], done: [C.greenBg, C.green], ghost: [C.card, C.ink] };
   let [bg, col] = map[tone]; if (disabled) { bg = C.line; col = C.faint; }
@@ -563,6 +583,9 @@ function ScheduleSwapRow({ dow, draggable, children }) {
       {...(draggable ? listeners : {})}
       style={{
         position: "relative",
+        // without this the wrapper shrinks to its text and the week's rows end up ragged
+        flex: 1,
+        minWidth: 0,
         zIndex: isDragging ? 10 : "auto",
         transform: transform ? `${DndCSS.Translate.toString(transform)} scale(1.03)` : undefined,
         opacity: isDragging ? 0.95 : 1,
@@ -663,7 +686,7 @@ function Onboarding({ onDone }) {
           name: f.name.trim(), username: f.name.trim().toLowerCase().replace(/\s+/g, ""), birthDate: f.birthDate,
           heightCm: Math.round(num(f.height)), heightUnit: "cm", currentKg: toKg(f.current), goalKg: toKg(f.goal),
           unit: f.unit, rateMag: (deriveGoal({ currentKg: toKg(f.current), goalKg: toKg(f.goal) }, toKg(f.current)).type === "maintain" ? 0 : (pace === "steady" ? 0.25 : 0.5)), reminderOn: false, reminderTime: "07:30", onboarded: true, createdAt: new Date().toISOString(),
-        })} style={{ width: "100%", height: 58, borderRadius: 13, border: "none", cursor: ready ? "pointer" : "default", background: ready ? ACC : C.line, color: ready ? "#fff" : C.faint, fontFamily: SANS, fontSize: 16, fontWeight: 650, WebkitTapHighlightColor: "transparent" }}>Start training</button>
+        })} style={{ width: "100%", height: 58, borderRadius: 13, border: "none", cursor: ready ? "pointer" : "default", background: ready ? ACC : C.line, color: ready ? C.page : C.sub, fontFamily: SANS, fontSize: 16, fontWeight: 650, WebkitTapHighlightColor: "transparent" }}>Start training</button>
       </div>
     </div>
   );
@@ -730,6 +753,7 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
   const weekStart = addDays(mondayOf(new Date()), wkOffset * 7);
   const today0 = startOfDay(new Date());
   const startedAt0 = active?.startedAt ? startOfDay(new Date(active.startedAt)) : null;
+  const slots = active && !paused ? weekSessionSlots(history, active, weekStart) : new Map();
   const days = Array.from({ length: 7 }).map((_, i) => {
     const dt = addDays(weekStart, i); const key = ymd(dt); const dow = dt.getDay();
     const aidx = active && !paused ? assignedIdx(active, dt) : null;
@@ -738,7 +762,7 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
     const weighed = weightLog[key] != null;
     const past = startOfDay(dt) < today0;
     const afterStart = startedAt0 ? startOfDay(dt) >= startedAt0 : false;
-    const wDone = scheduled ? !!sessionForWorkout(history, active, dt, aidx) : false;
+    const wDone = scheduled && slots.has(key);
     const missed = scheduled && past && !wDone && afterStart && !paused;
     // The week tracker's bar is the share of that day's open items that got closed: the
     // scheduled workout, the weigh-in, the reading goal, and every habit that existed then.
@@ -991,11 +1015,13 @@ function SessionHeader({ live, label, sub, doneCount, totalSets, onMinimise, men
         </div>
         <div style={{ position: "relative", flexShrink: 0 }}>
           <button onClick={() => setMenuOpen(!menuOpen)} style={round} aria-label="Session options"><DotsThree size={20} weight="bold" /></button>
-          {menuOpen && (
+          {menuOpen && (<>
+            {/* catches the tap that should dismiss the menu — without it the menu sits over the session */}
+            <div onClick={() => setMenuOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 29 }} />
             <div style={{ position: "absolute", right: 0, top: 42, background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, boxShadow: C.shadowMd, padding: 4, zIndex: 30, minWidth: 168 }}>
               <button onClick={onDiscard} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 12px", borderRadius: 7, border: "none", background: "none", cursor: "pointer", fontFamily: SANS, fontSize: 14, color: C.red, WebkitTapHighlightColor: "transparent" }}><Trash2 size={15} /> Discard workout</button>
             </div>
-          )}
+          </>)}
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
@@ -1056,8 +1082,19 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
   };
   useEffect(() => { if (!live && (phase === "active" || phase === "review")) setPhase("schedule"); }, [live, phase]);
 
-  if (!active) return (<div style={{ padding: "6px 18px 24px" }}><PageTitle sub="Workout">This week</PageTitle><Card style={{ padding: 30, textAlign: "center" }}><div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink }}>No active program</div><div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, margin: "6px 0 18px", lineHeight: 1.5 }}>Start a program on the Programs tab, then your week appears here.</div><BigButton tone="acc" onClick={() => go("programs")}>Go to Programs</BigButton></Card></div>);
-  if (!active.days.length) return (<div style={{ padding: "6px 18px 24px" }}><PageTitle sub={active.name}>This week</PageTitle><Card style={{ padding: 30, textAlign: "center" }}><div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 650, color: C.ink }}>No training days yet</div><div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, margin: "6px 0 18px" }}>Add days and exercises to {active.name}.</div><BigButton tone="acc" onClick={() => go("programs")}>Edit program</BigButton></Card></div>);
+  const trainEmpty = (kicker, title, body, cta) => (
+    <div style={{ padding: "6px 17px 24px" }}>
+      <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>{kicker}</div>
+      <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: "8px 0 20px", letterSpacing: -0.54 }}>Train</h1>
+      <Card style={{ padding: 26, textAlign: "center" }}>
+        <div style={{ fontFamily: SANS, fontSize: 17, fontWeight: 500, color: C.ink, letterSpacing: -0.2 }}>{title}</div>
+        <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, margin: "7px 0 16px", lineHeight: 1.55 }}>{body}</div>
+        <button onClick={() => go("programs")} style={{ height: 40, padding: "0 18px", borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{cta}</button>
+      </Card>
+    </div>
+  );
+  if (!active) return trainEmpty("No program yet", "Nothing scheduled", "Pick a program from the library, or build your own, and your week appears here.", "Browse programs");
+  if (!active.days.length) return trainEmpty(active.name, "No training days yet", `Add days and exercises to ${active.name} before you start training it.`, "Edit program");
 
   const startWorkout = (idx) => {
     const d = active.days[idx];
@@ -1106,10 +1143,10 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
   if (phase === "schedule") {
     const wkStart = mondayOf(new Date());
     const today0 = startOfDay(new Date());
+    const slots = weekSessionSlots(history, active, wkStart);
     const week = Array.from({ length: 7 }).map((_, i) => {
-      const dt = addDays(wkStart, i); const aidx = assignedIdx(active, dt);
-      const sess = aidx != null ? sessionForWorkout(history, active, dt, aidx) : null;
-      return { dt, key: ymd(dt), dow: dt.getDay(), aidx, done: !!sess, inProgress: !!(live && live.dayIdx === aidx), isToday: sameDay(dt, new Date()), past: startOfDay(dt) < today0 };
+      const dt = addDays(wkStart, i); const key = ymd(dt); const aidx = assignedIdx(active, dt);
+      return { dt, key, dow: dt.getDay(), aidx, done: slots.has(key), inProgress: !!(live && live.dayIdx === aidx), isToday: sameDay(dt, new Date()), past: startOfDay(dt) < today0 };
     });
     const nextRow = week.find((d) => d.aidx != null && !d.done && !d.past) || week.find((d) => d.aidx != null && !d.done);
 
@@ -1262,17 +1299,24 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
   if (phase === "pick") {
     const todayAi = assignedIdx(active, new Date());
     return (
-      <div style={{ padding: "6px 18px 24px" }}>
+      <div style={{ padding: "6px 17px 24px" }}>
         <button onClick={() => setPhase("schedule")} style={backBtn}><ChevronLeft size={20} /> Train</button>
-        <PageTitle sub={`${active.name} · week ${programWeek(active)}`}>Pick a workout</PageTitle>
-        <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, marginTop: -12, marginBottom: 16, lineHeight: 1.45 }}>Choose which session to train.</div>
-        <div style={{ display: "grid", gap: 10 }}>
+        <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>{active.name} · Week {programWeek(active)}</div>
+        <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: "8px 0 6px", letterSpacing: -0.54 }}>Pick a workout</h1>
+        <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, marginBottom: 18, lineHeight: 1.5 }}>Choose which session to train.</div>
+        <div style={{ display: "grid", gap: 9 }}>
           {active.days.map((d, i) => { const sug = i === todayAi; return (
-            <button key={i} onClick={() => startWorkout(i)} style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "left", padding: "16px 18px", borderRadius: 14, border: `1.5px solid ${sug ? ACC : C.line}`, background: sug ? ACC_BG : C.card, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
-              <div style={{ width: 44, height: 44, borderRadius: 12, background: sug ? ACC : C.page, color: sug ? "#fff" : C.sub, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Dumbbell size={20} /></div>
-              <div style={{ flex: 1 }}><div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontFamily: SANS, fontSize: 16.5, fontWeight: 650, color: C.ink }}>{wLabel(i)}</span>{sug && <span style={{ fontFamily: MONO, fontSize: 8.5, background: ACC, color: C.page, padding: "2px 6px", borderRadius: 5, letterSpacing: .5 }}>TODAY</span>}</div>
-                <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.faint, marginTop: 3 }}>{d.ex.length} exercise{d.ex.length !== 1 ? "s" : ""} · {d.ex.reduce((n, e) => n + setCount(e), 0)} sets</div></div>
-              <Play size={18} color={sug ? ACC : C.faint} />
+            <button key={i} onClick={() => startWorkout(i)} style={{ position: "relative", display: "flex", alignItems: "center", gap: 13, textAlign: "left", overflow: "hidden", padding: sug ? "15px 15px 15px 19px" : "15px 15px", borderRadius: 14, border: `1px solid ${sug ? AC.a800 : C.line}`, background: C.card, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+              {sug && <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 2, background: AC.base }} />}
+              <div style={{ width: 42, height: 42, borderRadius: 8, background: C.page, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Dumbbell size={19} color={sug ? ACC : C.sub} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <span style={{ fontFamily: SANS, fontSize: 16, fontWeight: 500, color: C.ink, letterSpacing: -0.2 }}>{wLabel(i)}</span>
+                  {sug && <span style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, color: AC.a300 }}>Today</span>}
+                </div>
+                <div style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, marginTop: 3 }}>{d.ex.length} exercise{d.ex.length !== 1 ? "s" : ""} · {d.ex.reduce((n, e) => n + setCount(e), 0)} sets</div>
+              </div>
+              <Play size={17} weight="fill" color={sug ? ACC : C.faint} />
             </button>
           ); })}
         </div>
@@ -1282,15 +1326,17 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
 
   /* ================= DONE ================= */
   if (phase === "done") return (
-    <div style={{ padding: "6px 18px 24px" }}><PageTitle sub={`${active.name} · week ${programWeek(active)}`}>{wLabel(finishedIdx ?? 0)}</PageTitle>
+    <div style={{ padding: "6px 17px 24px" }}>
+      <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>{active.name} · Week {programWeek(active)}</div>
+      <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: "8px 0 20px", letterSpacing: -0.54 }}>{wLabel(finishedIdx ?? 0)}</h1>
       <Card style={{ padding: 28, textAlign: "center", marginBottom: 14 }}>
-        <div style={{ width: 60, height: 60, borderRadius: 30, background: C.greenBg, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}><Check size={30} color={C.green} strokeWidth={3} /></div>
-        <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 680, color: C.ink }}>Session saved</div>
-        <div style={{ fontFamily: SANS, fontSize: 14, color: C.sub, marginTop: 8, lineHeight: 1.5 }}>{savedCount} sets recorded. Your next session and recommendations are updated.</div>
+        <div style={{ width: 56, height: 56, borderRadius: 28, background: C.greenBg, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}><Check size={28} color={C.green} /></div>
+        <div style={{ fontFamily: SANS, fontSize: 19, fontWeight: 500, color: C.ink, letterSpacing: -0.3 }}>Session saved</div>
+        <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, marginTop: 8, lineHeight: 1.55 }}>{savedCount} set{savedCount === 1 ? "" : "s"} recorded. Your next session and recommendations are updated.</div>
       </Card>
-      <BigButton tone="acc" onClick={() => go("today")}>Take me back to today</BigButton>
-      <div style={{ height: 10 }} />
-      <BigButton tone="ghost" onClick={() => setPhase("schedule")}>Back to this week</BigButton>
+      <BigButton tone="acc" onClick={() => go("today")}>Back to today</BigButton>
+      <div style={{ height: 9 }} />
+      <BigButton tone="ghost" onClick={() => setPhase("schedule")}>Back to Train</BigButton>
     </div>
   );
 
@@ -1319,19 +1365,21 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
 
   /* ================= REVIEW ================= */
   if (phase === "review") return (
-    <div style={{ padding: "6px 18px 24px" }}><PageTitle sub={subLine}>{wLabel(live.dayIdx)}</PageTitle>
-      <Card style={{ padding: 22 }}>
-        <Eyebrow>Session complete</Eyebrow>
-        <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 650, color: C.ink, margin: "8px 0 4px" }}>How did that session feel?</div>
-        <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, marginBottom: 20, lineHeight: 1.4 }}>This tunes next week — a tough session won't be read as a plateau if you were just tired.</div>
-        <div style={{ display: "grid", gap: 10 }}>
+    <div style={{ padding: "6px 17px 24px" }}>
+      <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>{subLine}</div>
+      <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: "8px 0 20px", letterSpacing: -0.54 }}>{wLabel(live.dayIdx)}</h1>
+      <Card style={{ padding: 20 }}>
+        <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>Session complete</div>
+        <div style={{ fontFamily: SANS, fontSize: 19, fontWeight: 500, color: C.ink, margin: "9px 0 5px", letterSpacing: -0.3 }}>How did that session feel?</div>
+        <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, marginBottom: 18, lineHeight: 1.5 }}>This tunes next week — a tough session won't be read as a plateau if you were just tired.</div>
+        <div style={{ display: "grid", gap: 9 }}>
           {READINESS.map(({ v, label, Icon }) => (
-            <button key={v} onClick={() => finish(v)} style={{ display: "flex", alignItems: "center", gap: 14, height: 62, borderRadius: 13, border: `1.5px solid ${C.line}`, background: C.card, cursor: "pointer", padding: "0 18px", WebkitTapHighlightColor: "transparent" }}>
-              <div style={{ width: 40, height: 40, borderRadius: 11, background: ACC_BG, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon size={20} color={ACC} /></div>
-              <span style={{ fontFamily: SANS, fontSize: 16, fontWeight: 600, color: C.ink }}>{label}</span><ChevronRight size={18} color={C.faint} style={{ marginLeft: "auto" }} /></button>
+            <button key={v} onClick={() => finish(v)} style={{ display: "flex", alignItems: "center", gap: 13, height: 58, borderRadius: 12, border: `1px solid ${C.line}`, background: C.page, cursor: "pointer", padding: "0 16px", WebkitTapHighlightColor: "transparent" }}>
+              <div style={{ width: 38, height: 38, borderRadius: 8, background: ACC_BG, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon size={19} color={ACC} /></div>
+              <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink }}>{label}</span><ChevronRight size={17} color={C.faint} style={{ marginLeft: "auto" }} /></button>
           ))}
         </div>
-        <button onClick={() => setPhase("active")} style={{ width: "100%", height: 44, marginTop: 12, borderRadius: 11, border: "none", background: "transparent", color: C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Back to logging</button>
+        <button onClick={() => setPhase("active")} style={{ width: "100%", height: 42, marginTop: 12, borderRadius: 8, border: "none", background: "transparent", color: C.sub, fontFamily: SANS, fontSize: 13.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Back to logging</button>
       </Card>
     </div>
   );
@@ -1411,7 +1459,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
                     <div style={{ flex: 1, textAlign: "center", fontFamily: MONO, fontSize: 12, color: C.faint }}>{target}</div>
                     <div style={cell}><input inputMode="decimal" placeholder={bw ? "BW" : "—"} value={sd.w || ""} onChange={(e) => upd(key, "w", e.target.value)} style={inp} /></div>
                     <div style={cell}><input inputMode="numeric" placeholder={spec ? String(spec.reps) : "—"} value={sd.reps || ""} onChange={(e) => upd(key, "reps", e.target.value)} style={inp} /></div>
-                    <button onClick={() => (strategy.setRatingKind === "log" ? rate(key, "logged") : setOpenRating(openRating === key ? null : key))} style={{ width: 48, height: 44, borderRadius: 10, cursor: "pointer", border: rated ? "none" : `1.5px solid ${C.line}`, background: rated ? (ratings[rated]?.c || ACC) : C.card, display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }}><Check size={18} color={rated ? "#fff" : C.faint} strokeWidth={rated ? 3 : 2.4} /></button>
+                    <button onClick={() => (strategy.setRatingKind === "log" ? rate(key, "logged") : setOpenRating(openRating === key ? null : key))} style={{ width: 48, height: 44, borderRadius: 10, cursor: "pointer", border: rated ? "none" : `1.5px solid ${C.line}`, background: rated ? (ratings[rated]?.c || ACC) : C.card, display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }}><Check size={18} color={rated ? C.page : C.faint} strokeWidth={rated ? 3 : 2.4} /></button>
                   </div>
                   {openRating === key && (
                     <div style={{ padding: "4px 0 10px" }}><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, letterSpacing: 1, marginBottom: 8 }}>{strategy.setRatingKind === "hitmiss" ? "DID YOU HIT THE TARGET REPS?" : "HOW HARD WAS THAT SET?"}</div>
@@ -1438,20 +1486,7 @@ const tagPill = (color, bg) => ({ fontFamily: MONO, fontSize: 10.5, color, backg
 // One distinct, generic (no people/photos) icon per catalog program so the library is easy
 // to tell apart at a glance, rather than several programs sharing one tag-based icon.
 const CATALOG_ICON_BY_ID = {
-  cat_ss: Weight,
-  cat_sl5x5: Repeat,
-  cat_icf: Flame,
-  cat_greyskull: TrendingUp,
-  cat_redditppl: RotateCw,
-  cat_phul: Gauge,
-  cat_phat: Rocket,
-  cat_gvt: Boxes,
-  cat_fullbody3x: PersonStanding,
-  cat_upperlower4: Layers,
-  cat_brosplit: Grid3x3,
-  cat_531: BarChart3,
   cat_531bbb: Hexagon,
-  cat_nsuns: Zap,
   cat_gzclp: Target,
 };
 function catalogIcon(templateId, tags) {
@@ -1742,7 +1777,7 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
         </div>
       )}
       <div style={{ display: "flex", gap: 6, justifyContent: "space-between", marginBottom: 16 }}>
-        {[1, 2, 3, 4, 5, 6, 0].map((wd) => { const on = pickDays.includes(wd); return (<button key={wd} onClick={() => toggleDay(wd)} style={{ flex: 1, height: 46, borderRadius: 11, border: `1.5px solid ${on ? ACC : C.line}`, background: on ? ACC : C.card, color: on ? "#fff" : C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 650, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{WD_LETTER[wd]}</button>); })}
+        {[1, 2, 3, 4, 5, 6, 0].map((wd) => { const on = pickDays.includes(wd); return (<button key={wd} onClick={() => toggleDay(wd)} style={{ flex: 1, height: 46, borderRadius: 11, border: `1.5px solid ${on ? ACC : C.line}`, background: on ? ACC : C.card, color: on ? C.page : C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 650, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{WD_LETTER[wd]}</button>); })}
       </div>
       <BigButton tone="acc" disabled={pickDays.length === 0} onClick={() => confirmStart([...pickDays].sort((a, b) => monFirst(a) - monFirst(b)))}>Start on {pickDays.length} day{pickDays.length !== 1 ? "s" : ""}/week</BigButton>
       <button onClick={() => setStarting(false)} style={{ width: "100%", height: 44, marginTop: 8, borderRadius: 11, border: "none", background: "transparent", color: C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
@@ -2040,7 +2075,7 @@ function Picker({ inDay, onToggle, onBack, dayName }) {
       <button onClick={onBack} style={backBtn}><ChevronLeft size={20} /> {dayName}</button>
       <PageTitle sub={`Exercise library · ${EXERCISE_DB.length} exercises`}>Add exercise</PageTitle>
       <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, border: `1.5px solid ${C.line}`, borderRadius: 13, padding: "0 14px", height: 54, marginBottom: 12 }}><Search size={18} color={C.faint} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search exercises" style={{ border: "none", outline: "none", fontFamily: SANS, fontSize: 16, flex: 1, height: "100%", color: C.ink, background: "transparent" }} />{q && <X size={18} color={C.faint} onClick={() => setQ("")} style={{ cursor: "pointer" }} />}</div>
-      <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 16, paddingBottom: 2 }}>{EQUIP_OPTIONS.map((eq) => (<button key={eq} onClick={() => setEquip(eq)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${equip === eq ? C.ink : C.line}`, background: equip === eq ? C.ink : C.card, color: equip === eq ? "#fff" : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{eq === "All" ? eq : cap(eq)}</button>))}</div>
+      <div style={{ display: "flex", gap: 7, overflowX: "auto", marginBottom: 16, paddingBottom: 2 }}>{EQUIP_OPTIONS.map((eq) => (<button key={eq} onClick={() => setEquip(eq)} style={{ whiteSpace: "nowrap", padding: "8px 15px", borderRadius: 20, cursor: "pointer", border: `1.5px solid ${equip === eq ? C.ink : C.line}`, background: equip === eq ? ACC : C.card, color: equip === eq ? C.page : C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 550, WebkitTapHighlightColor: "transparent" }}>{eq === "All" ? eq : cap(eq)}</button>))}</div>
       {filtered.map((e) => { const on = inDay.includes(e.id); return (
         <button key={e.id} onClick={() => onToggle(e.id)} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left", background: C.card, border: `1px solid ${on ? ACC : C.line}`, borderRadius: 13, padding: "10px 16px", marginBottom: 8, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
           <ExerciseThumb exercise={e} onOpen={setDetail} />
