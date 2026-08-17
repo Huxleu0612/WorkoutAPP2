@@ -49,6 +49,26 @@ export function mergeHabits(local = [], remote = []) {
   return [...m.values()];
 }
 
+// Programs carry ids, so union them the same way as habits. Two devices that each added a
+// program both keep it, and neither can erase the other's by being written to later.
+export function mergePrograms(local = [], remote = []) {
+  const m = new Map();
+  (remote || []).forEach((p) => p?.id && m.set(p.id, p));
+  (local || []).forEach((p) => {
+    if (!p?.id) return;
+    const r = m.get(p.id);
+    // Local wins the body of a program it already knows about — it holds the edits you just
+    // made — but a program only the server has still comes down.
+    m.set(p.id, r ? { ...r, ...p } : p);
+  });
+  return [...m.values()];
+}
+
+// "Empty" is indistinguishable from "brand new device" in the data, which is why an empty
+// value must never be treated as an intentional wipe.
+export const isEmptyValue = (v) =>
+  v == null || (Array.isArray(v) && v.length === 0) || (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0);
+
 // remoteNewer decides the settings-like keys. Server time is authoritative, so a device with
 // a wrong clock cannot win by claiming the future.
 export function mergeKey(key, local, remote, remoteNewer) {
@@ -57,6 +77,10 @@ export function mergeKey(key, local, remote, remoteNewer) {
   if (key === "wa_history") return mergeHistory(local, remote);
   if (key === "wa_weightlog") return mergeWeightLog(local, remote);
   if (key === "wa_habits") return mergeHabits(local, remote);
+  if (key === "wa_programs") return mergePrograms(local, remote);
+  // An empty remote is never allowed to blank out real local data, whatever the timestamps
+  // say. Losing a program library to a phone that happened to sync later is unacceptable.
+  if (isEmptyValue(remote) && !isEmptyValue(local)) return local;
   return remoteNewer ? remote : local;
 }
 
@@ -81,8 +105,12 @@ export async function pull(userId) {
 
 export async function push(userId) {
   if (!syncConfigured) return { ok: false, reason: "not-configured" };
+  // Empty values are never pushed. A device that has just signed in and holds nothing yet
+  // would otherwise publish that emptiness as fact and blank out every other device.
+  // The cost is that genuinely deleting everything does not propagate, which is the right
+  // way round to be wrong.
   const rows = SYNC_KEYS.map((k) => ({ user_id: userId, key: k, value: readLocal(k) }))
-    .filter((r) => r.value != null);
+    .filter((r) => !isEmptyValue(r.value));
   if (!rows.length) return { ok: true, pushed: 0 };
   const { error } = await supabase.from("app_data").upsert(rows, { onConflict: "user_id,key" });
   if (error) return { ok: false, reason: error.message };

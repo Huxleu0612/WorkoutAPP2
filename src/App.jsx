@@ -276,11 +276,13 @@ const volumeAndSets = (sessions) => {
 };
 // consecutive weeks with at least one logged session. The current week only breaks the streak
 // once it is over, so a fresh Monday doesn't read as having lost it.
+// Counts completed weeks only. The week you are in does not count towards a streak until it
+// is over, so a first week in progress reads 0 rather than claiming a week you have not
+// finished yet.
 const weekStreak = (sessions) => {
   if (!sessions.length) return 0;
   const weeks = new Set(sessions.map((s) => ymd(mondayOf(new Date(s.date)))));
-  let cursor = mondayOf(new Date());
-  if (!weeks.has(ymd(cursor))) cursor = addDays(cursor, -7);
+  let cursor = addDays(mondayOf(new Date()), -7);
   let n = 0;
   while (weeks.has(ymd(cursor))) { n++; cursor = addDays(cursor, -7); }
   return n;
@@ -298,10 +300,41 @@ const kFmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round
 /* ===== habits =====
    A habit only counts on days it actually existed, so adding one today does not
    retroactively make last month look like it was missed. */
+/* Traffic-light states. Stored as strings so a value is self-describing in the data:
+     green  — done, counts in full
+     orange — in progress, counts as half
+     red    — did not complete, and deliberately excluded from scoring. This is the
+              "I was out until midnight, that was my call" case: it is not a miss held
+              against you, it is a day that does not count either way.
+   Anything unmarked on a past day counts as a miss.
+   Legacy `true` values from before this existed read as green, so nothing already logged
+   changes meaning or is lost. */
+const HABIT_GREEN = "green", HABIT_ORANGE = "orange", HABIT_RED = "red";
+const habitState = (h, key) => { const v = h?.ticks?.[key]; return v === true ? HABIT_GREEN : v || null; };
+const habitScore = (state) => (state === HABIT_GREEN ? 1 : state === HABIT_ORANGE ? 0.5 : 0);
+const habitCounts = (state) => state !== HABIT_RED; // red drops out of the denominator too
+const HABIT_CYCLE = [null, HABIT_GREEN, HABIT_ORANGE, HABIT_RED];
+const nextHabitState = (cur) => HABIT_CYCLE[(HABIT_CYCLE.indexOf(cur ?? null) + 1) % HABIT_CYCLE.length];
+const habitStateColor = (state) => (state === HABIT_GREEN ? C.green : state === HABIT_ORANGE ? C.amber : state === HABIT_RED ? C.red : NEU.n700);
+
 const habitsOn = (habits, key) => (Array.isArray(habits) ? habits : []).filter((h) => ymd(new Date(h.createdAt)) <= key && (!h.archivedAt || key < ymd(new Date(h.archivedAt))));
-const habitDayPct = (habits, key) => { const on = habitsOn(habits, key); if (!on.length) return null; return Math.round((on.filter((h) => h.ticks?.[key]).length / on.length) * 100); };
+const habitDayPct = (habits, key) => {
+  const on = habitsOn(habits, key).filter((h) => habitCounts(habitState(h, key)));
+  if (!on.length) return null; // every habit that day was marked red, so the day has no score
+  return Math.round((on.reduce((n, h) => n + habitScore(habitState(h, key)), 0) / on.length) * 100);
+};
 // today only breaks a streak once the day is over, so an untouched morning doesn't read as a loss
-const habitStreak = (h) => { let n = 0, d = startOfDay(new Date()); if (!h.ticks?.[ymd(d)]) d = addDays(d, -1); while (h.ticks?.[ymd(d)]) { n++; d = addDays(d, -1); } return n; };
+// Green keeps a streak. Orange and red neither extend nor break it — a half-done or
+// deliberately-skipped day just does not count.
+const habitStreak = (h) => {
+  const held = (d) => habitState(h, ymd(d)) === HABIT_GREEN;
+  const neutral = (d) => { const s = habitState(h, ymd(d)); return s === HABIT_ORANGE || s === HABIT_RED; };
+  let d = startOfDay(new Date());
+  if (!held(d)) d = addDays(d, -1);
+  let n = 0;
+  while (true) { if (held(d)) n++; else if (!neutral(d)) break; d = addDays(d, -1); }
+  return n;
+};
 const habitBestRun = (habits, days = 180) => {
   let best = 0, run = 0;
   for (let i = days; i >= 0; i--) {
@@ -318,9 +351,11 @@ const habitMonthStats = (habits, monthDate) => {
   for (let d = new Date(m); d < nx && d <= today0; d = addDays(d, 1)) {
     const k = ymd(d), on = habitsOn(habits, k);
     if (!on.length) continue;
-    const done = on.filter((h) => h.ticks?.[k]).length;
-    hit += done; total += on.length;
-    if (done === on.length) perfect++;
+    const counted = on.filter((h) => habitCounts(habitState(h, k)));
+    if (!counted.length) continue; // whole day marked red, so it does not affect the month
+    const done = counted.reduce((n, h) => n + habitScore(habitState(h, k)), 0);
+    hit += done; total += counted.length;
+    if (done === counted.length) perfect++;
     if (done === 0) missed++;
   }
   return { pct: total ? Math.round((hit / total) * 100) : null, perfect, missed };
@@ -451,7 +486,9 @@ function scheduledSoFar(p) {
   const start = startOfDay(new Date(p.startedAt));
   const today = startOfDay(new Date());
   let n = 0, guard = 0;
-  for (let d = new Date(start); d <= today && guard < 2000; d = addDays(d, 1), guard++) if (p.scheduleDays.includes(d.getDay())) n++;
+  // Stops before today on purpose. A session scheduled for tonight is not owed yet, so
+  // counting it would drag consistency down all day and only recover after you trained.
+  for (let d = new Date(start); d < today && guard < 2000; d = addDays(d, 1), guard++) if (p.scheduleDays.includes(d.getDay())) n++;
   const pausedWeeks = ((p.pausedMs || 0) + (p.pausedAt ? Date.now() - new Date(p.pausedAt).getTime() : 0)) / (7 * DAYMS);
   return Math.max(0, n - Math.round(pausedWeeks * p.scheduleDays.length));
 }
@@ -894,19 +931,18 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
     // scheduled workout, the weigh-in, the reading goal, and every habit that existed then.
     const hOn = habitsOn(habits, key);
     const items = 2 + (scheduled ? 1 : 0) + hOn.length;
-    const closed = (weighed ? 1 : 0) + (wDone ? 1 : 0) + (readMet(read, key) ? 1 : 0) + hOn.filter((h) => h.ticks?.[key]).length;
+    const closed = (weighed ? 1 : 0) + (wDone ? 1 : 0) + (readMet(read, key) ? 1 : 0) + hOn.reduce((n, h) => n + habitScore(habitState(h, key)), 0);
     const pct = Math.round((closed / items) * 100);
     return { dt, key, dow, aidx, scheduled, done, wDone, weighed, missed, past, pct, isToday: sameDay(dt, new Date()) };
   });
   const now = new Date();
   const todayRow = days.find((d) => d.isToday);
   const habitsToday = habitsOn(habits, todayKey);
-  const openHabits = habitsToday.filter((h) => !h.ticks?.[todayKey]);
-  const tickHabit = (id) => setHabits((hs) => hs.map((h) => h.id !== id ? h : { ...h, ticks: { ...h.ticks, [todayKey]: true } }));
+  // Only genuinely untouched habits are "open". Green is done, and orange or red have both
+  // already had a decision made about them.
+  const openHabits = habitsToday.filter((h) => habitState(h, todayKey) == null);
+  const tickHabit = (id) => setHabits((hs) => hs.map((h) => h.id !== id ? h : { ...h, ticks: { ...h.ticks, [todayKey]: HABIT_GREEN } }));
   const readLeft = Math.max(0, (read.goalMin || 20) - readMin(read, todayKey));
-  const openToday = (todayRow ? (todayRow.scheduled && !todayRow.wDone ? 1 : 0) + (todayRow.weighed ? 0 : 1) : (weightLog[todayKey] != null ? 0 : 1)) + openHabits.length + (readLeft > 0 ? 1 : 0);
-  const monthCount = (back) => { const m = new Date(now.getFullYear(), now.getMonth() - back, 1), nx = new Date(m.getFullYear(), m.getMonth() + 1, 1); return history.filter((h) => { const d = new Date(h.date); return d >= m && d < nx; }).length; };
-  const monthDone = monthCount(0), monthPrev = monthCount(1);
 
   const ndi = nextDayIndex(history, active);
   const selDay = days.find((d) => d.key === selKey) || days[0];
@@ -938,7 +974,7 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
     <div style={{ padding: "6px 17px 24px" }}>
       {/* KICKER + GREETING */}
       <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>
-        {WD_LONG[now.getDay()]} {now.getDate()} {MON[now.getMonth()]} · {openToday === 0 ? "nothing open" : `${openToday} open`}
+        {WD_LONG[now.getDay()]} {now.getDate()} {MON[now.getMonth()]}
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, margin: "8px 0 20px" }}>
         <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.54, lineHeight: 1.15 }}>{greet}, {profile.name || "Athlete"}</h1>
@@ -952,7 +988,6 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
           <Eyebrow>{wkOffset === 0 ? "This week" : `${weekStart.getDate()} ${MON[weekStart.getMonth()]} – ${addDays(weekStart, 6).getDate()} ${MON[addDays(weekStart, 6).getMonth()]}`}</Eyebrow>
           <button onClick={() => setWkOffset(Math.min(0, wkOffset + 1))} aria-label="Next week" disabled={wkOffset >= 0} style={{ background: "none", border: "none", cursor: wkOffset < 0 ? "pointer" : "default", padding: 2, display: "flex", WebkitTapHighlightColor: "transparent" }}><ChevronRight size={15} color={wkOffset < 0 ? C.faint : "transparent"} /></button>
         </div>
-        {monthDone > 0 && <div style={{ fontFamily: SANS, fontSize: 11, color: AC.a300, whiteSpace: "nowrap" }}>{monthDone} this month{monthPrev > 0 ? ` · was ${monthPrev}` : ""}</div>}
       </div>
       <Card style={{ padding: 11, marginBottom: 16, boxShadow: C.shadowSm }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6 }}>
@@ -1366,10 +1401,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
           );
         })()}
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <SectionLabel>This week's schedule</SectionLabel>
-          <button onClick={() => setCalcOpen({ initialKg: 0 })} style={{ ...miniRound, marginBottom: 8 }}><Calculator size={16} /></button>
-        </div>
+        <SectionLabel>This week's schedule</SectionLabel>
         <DndContext sensors={scheduleSensors} onDragEnd={({ active, over }) => { if (over) swapScheduleDays(Number(active.id.slice(6)), Number(over.id.slice(6))); }} modifiers={[restrictToVerticalAxis]}>
           <div style={{ display: "grid", gap: 10 }}>
             {week.map((d, i) => {
@@ -2516,8 +2548,17 @@ function Habits({ habits, setHabits }) {
   const [sheet, setSheet] = useState(null); // {habit} | "month"
   const todayKey = ymd(new Date());
   const active = habitsOn(habits, todayKey);
-  const doneToday = active.filter((h) => h.ticks?.[todayKey]).length;
-  const toggle = (id) => setHabits((hs) => hs.map((h) => h.id !== id ? h : { ...h, ticks: { ...h.ticks, [todayKey]: !h.ticks?.[todayKey] } }));
+  const doneToday = active.filter((h) => habitState(h, todayKey) === HABIT_GREEN).length;
+  const countedToday = active.filter((h) => habitCounts(habitState(h, todayKey))).length;
+  // Tapping cycles unmarked -> green -> orange -> red -> unmarked, so every state is
+  // reachable with repeat taps and nothing needs a long-press or a menu.
+  const cycle = (id) => setHabits((hs) => hs.map((h) => {
+    if (h.id !== id) return h;
+    const next = nextHabitState(habitState(h, todayKey));
+    const ticks = { ...h.ticks };
+    if (next == null) delete ticks[todayKey]; else ticks[todayKey] = next;
+    return { ...h, ticks };
+  }));
   const save = (id, patch) => setHabits((hs) => id ? hs.map((h) => h.id === id ? { ...h, ...patch } : h) : [...hs, { id: `hb_${Date.now()}`, createdAt: new Date().toISOString(), ticks: {}, visibleToFriends: false, ...patch }]);
   const remove = (id) => setHabits((hs) => hs.filter((h) => h.id !== id));
 
@@ -2528,7 +2569,7 @@ function Habits({ habits, setHabits }) {
   return (
     <div style={{ padding: "6px 17px 24px" }}>
       <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>
-        {active.length ? `${doneToday} of ${active.length} done today` : "Nothing tracked yet"}
+        {active.length ? `${doneToday} of ${countedToday} done today${countedToday < active.length ? ` · ${active.length - countedToday} not counting` : ""}` : "Nothing tracked yet"}
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, margin: "8px 0 20px" }}>
         <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.54 }}>Habits</h1>
@@ -2544,20 +2585,30 @@ function Habits({ habits, setHabits }) {
       ) : (
         <Card style={{ padding: "4px 15px", marginBottom: 18 }}>
           {active.map((h, i) => {
-            const on = !!h.ticks?.[todayKey], streak = habitStreak(h);
+            const st = habitState(h, todayKey), streak = habitStreak(h);
+            const dim = st === HABIT_GREEN || st === HABIT_RED;
+            const label = st === HABIT_GREEN ? "Done" : st === HABIT_ORANGE ? "In progress" : st === HABIT_RED ? "Did not complete · not counted" : null;
             return (
               <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 0", borderBottom: i === active.length - 1 ? "none" : `1px solid ${C.lineSoft}` }}>
-                <button onClick={() => toggle(h.id)} aria-label={`Tick ${h.name}`} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", flexShrink: 0, WebkitTapHighlightColor: "transparent" }}>
-                  {on ? <CheckCircle size={24} weight="fill" color={ACC} /> : <Circle size={24} color={NEU.n700} />}
+                <button onClick={() => cycle(h.id)} aria-label={`${h.name} — ${label || "not marked"}, tap to change`} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", flexShrink: 0, WebkitTapHighlightColor: "transparent" }}>
+                  {st ? <CheckCircle size={24} weight="fill" color={habitStateColor(st)} /> : <Circle size={24} color={NEU.n700} />}
                 </button>
                 <button onClick={() => setSheet({ habit: h })} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: 0, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
-                  <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: on ? NEU.n400 : C.ink, textDecoration: on ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.name}</div>
-                  {h.detail && <div style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.detail}</div>}
+                  <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: dim ? NEU.n400 : C.ink, textDecoration: st === HABIT_GREEN ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.name}</div>
+                  <div style={{ fontFamily: SANS, fontSize: 12, color: st ? habitStateColor(st) : NEU.n600, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label || h.detail || "Not marked yet"}</div>
                 </button>
                 <span style={{ fontFamily: SANS, fontSize: 12.5, color: streak > 0 ? AC.a300 : NEU.n600, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{streak > 0 ? `${streak}d` : "—"}</span>
               </div>
             );
           })}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, paddingTop: 12, marginTop: 2, borderTop: `1px solid ${C.lineSoft}`, paddingBottom: 12 }}>
+            {[[C.green, "Done"], [C.amber, "In progress"], [C.red, "Did not complete"]].map(([c, t]) => (
+              <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: SANS, fontSize: 11, color: NEU.n600 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 4, background: c }} />{t}
+              </span>
+            ))}
+            <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, width: "100%" }}>Tap a circle to cycle. Red is your call and is left out of the score entirely.</span>
+          </div>
         </Card>
       )}
 
@@ -2661,8 +2712,7 @@ function Read({ read, setRead }) {
 
   return (
     <div style={{ padding: "6px 17px 24px" }}>
-      <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>Habit · {goal} min a day · {read.when || "before bed"}</div>
-      <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: "8px 0 20px", letterSpacing: -0.54 }}>Read</h1>
+      <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: "0 0 20px", letterSpacing: -0.54 }}>Read</h1>
 
       {/* TODAY'S READING */}
       <div style={{ position: "relative", overflow: "hidden", background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: "16px 16px 16px 18px", marginBottom: 18 }}>
@@ -2680,10 +2730,21 @@ function Read({ read, setRead }) {
           ))}
           {doneMin > 0 && <button onClick={() => setRead((r) => ({ ...r, log: { ...r.log, [todayKey]: 0 } }))} style={{ width: 42, height: 36, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.faint, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }} aria-label="Clear today"><RotateCcw size={14} /></button>}
         </div>
+        {/* Editable so the target can be matched to whatever the reading habit actually says. */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 13, paddingTop: 12, borderTop: `1px solid ${C.lineSoft}` }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: SANS, fontSize: 13, color: C.ink }}>Daily target</div>
+            <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 2 }}>Counts as done at {goal} min</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 9, flexShrink: 0 }}>
+            <MiniStep onClick={() => setRead((r) => ({ ...r, goalMin: Math.max(5, (r.goalMin || 20) - 5) }))}><Minus size={15} /></MiniStep>
+            <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink, minWidth: 52, textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{goal} min</span>
+            <MiniStep onClick={() => setRead((r) => ({ ...r, goalMin: Math.min(240, (r.goalMin || 20) + 5) }))}><Plus size={15} /></MiniStep>
+          </div>
+        </div>
       </div>
 
       {/* QUOTE BOX */}
-      <SectionLabel icon={<Quotes size={13} />}>Keep something from it</SectionLabel>
       <div style={{ background: C.card, border: `1px solid ${NEU.n800}`, borderRadius: 8, padding: 14, marginBottom: 18 }}>
         <textarea value={draftQuote} onChange={(e) => setDraftQuote(e.target.value)} rows={3} placeholder="Write down a quote or impression"
           style={{ width: "100%", minHeight: 88, background: "transparent", border: "none", outline: "none", resize: "none", fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, color: C.ink }} />
