@@ -2,3 +2,9 @@ node_modules/
 dist/
 .DS_Store
 *.local
+
+# Local Supabase config. Values are not secret, but they are per-environment —
+# Cloudflare Pages gets its own copy in the dashboard. See .env.example.
+.env
+.env.*
+!.env.example

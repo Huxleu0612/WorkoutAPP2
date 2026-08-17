@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from "recharts";
 // Phosphor is the design system's icon set. Aliased to the previous lucide names so the
 // ~235 call sites stay untouched; Phosphor has no strokeWidth prop, so the strokeWidth
@@ -31,6 +31,8 @@ import { CSS as DndCSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { progressionOf } from "./lib/progression";
 import { calcPlateLoad, DEFAULT_EQUIPMENT } from "./lib/plates";
+import { supabase, syncConfigured } from "./lib/supabase";
+import { syncNow, push as pushSync } from "./lib/sync";
 
 /* ===== TOKENS — Nocturne (dark) =====
    Sourced from the design handoff's styles.css. The semantic green/amber/red scale
@@ -142,6 +144,46 @@ function importBackup(file, done) {
   r.onerror = () => done(false);
   r.readAsText(file);
 }
+/* ===== cloud sync =====
+   Entirely optional. With no Supabase config the app behaves exactly as it always has:
+   local only, no sign-in, no network. Signing in is what turns sync on. */
+function useSync() {
+  const [user, setUser] = useState(null);
+  const [status, setStatus] = useState("idle");
+  const [lastSync, setLastSync] = useState(() => localStorage.getItem("wa_sync_pulled_at"));
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!syncConfigured) return;
+    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setUser(s?.user ?? null));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  const run = useCallback(async () => {
+    if (!user) return;
+    setStatus("syncing"); setError(null);
+    const r = await syncNow(user.id);
+    if (!r.ok) { setStatus("error"); setError(r.reason); return; }
+    setStatus("synced"); setLastSync(new Date().toISOString());
+    // The screens read their state from localStorage at mount, so a pull that actually
+    // changed something needs a reload to surface. Silent when nothing came down.
+    if (r.changed) window.location.reload();
+  }, [user]);
+
+  useEffect(() => { if (user) run(); }, [user, run]);
+
+  useEffect(() => {
+    if (!user) return;
+    const onVis = () => { if (document.hidden) pushSync(user.id); else run(); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("online", run);
+    return () => { document.removeEventListener("visibilitychange", onVis); window.removeEventListener("online", run); };
+  }, [user, run]);
+
+  return { configured: syncConfigured, user, status, lastSync, error, run };
+}
+
 const timeAgo = (iso) => {
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
   if (s < 90) return "just now";
@@ -2178,7 +2220,7 @@ function Picker({ inDay, onToggle, onBack, dayName }) {
    SETTINGS — a bottom sheet off the Today avatar, not a tab of its own
 ================================================================ */
 const cmToFtIn = (cm) => { const t = cm / 2.54; const f = Math.floor(t / 12); const i = Math.round(t - f * 12); return `${f}'${i}"`; };
-function SettingsSheet({ profile, setProfile, programs, history, weightLog, onReset, equipment, setEquipment, fin, setFin, onClose }) {
+function SettingsSheet({ profile, setProfile, programs, history, weightLog, onReset, equipment, setEquipment, fin, setFin, sync, onClose }) {
   const [view, setView] = useState("main");
   const [confirmReset, setConfirmReset] = useState(false);
   const [editingEquip, setEditingEquip] = useState(false);
@@ -2186,6 +2228,10 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
   const [confirmSnap, setConfirmSnap] = useState(null);
   const [restoreErr, setRestoreErr] = useState(null);
   const fileRef = useRef(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPw, setAuthPw] = useState("");
+  const [authMsg, setAuthMsg] = useState(null);
+  const [authBusy, setAuthBusy] = useState(false);
   const setP = (k, v) => setProfile((p) => ({ ...p, [k]: v }));
   const u = profile.unit;
   const active = activeProgram(programs);
@@ -2263,6 +2309,44 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
         <Row label="Time" last><div style={pill}><input type="time" value={profile.reminderTime || "07:30"} onChange={(e) => setP("reminderTime", e.target.value)} style={{ border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 14, color: C.ink }} /><Pencil size={12} color={C.faint} /></div></Row>
         <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.faint, padding: "0 0 12px", lineHeight: 1.45 }}>Note: real phone notifications need the installed app version — this saves your preferred time for now.</div>
       </Card>
+
+      {sync.configured && <>
+        <SectionLabel icon={<RotateCw size={13} />}>Sync</SectionLabel>
+        <Card style={{ padding: 16, marginBottom: 16 }}>
+          {sync.user ? (<>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sync.user.email}</div>
+                <div style={{ fontFamily: SANS, fontSize: 11.5, color: sync.status === "error" ? C.red : NEU.n600, marginTop: 3 }}>
+                  {sync.status === "syncing" ? "Syncing…" : sync.status === "error" ? (sync.error || "Sync failed") : sync.lastSync ? `Synced ${timeAgo(sync.lastSync)}` : "Not synced yet"}
+                </div>
+              </div>
+              <button onClick={sync.run} disabled={sync.status === "syncing"} style={{ height: 34, padding: "0 13px", borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 13, fontWeight: 500, cursor: "pointer", flexShrink: 0 }}>Sync now</button>
+            </div>
+            <button onClick={async () => { await supabase.auth.signOut(); }} style={{ marginTop: 14, height: 38, width: "100%", borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 13.5, cursor: "pointer" }}>Sign out</button>
+            <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 12, lineHeight: 1.5 }}>Your data stays on this device and works offline. Signing out leaves it here — it does not delete anything.</div>
+          </>) : (<>
+            <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, lineHeight: 1.55, marginBottom: 13 }}>Sign in to keep your history on more than one device. Everything keeps working offline either way.</div>
+            <input value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} type="email" autoComplete="email" placeholder="you@example.com" style={{ ...finField, marginBottom: 8 }} />
+            <input value={authPw} onChange={(e) => setAuthPw(e.target.value)} type="password" autoComplete="current-password" placeholder="Password" style={{ ...finField, marginBottom: 10 }} />
+            {authMsg && <div style={{ fontFamily: SANS, fontSize: 12.5, color: authMsg.bad ? C.red : C.green, marginBottom: 10, lineHeight: 1.45 }}>{authMsg.text}</div>}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button disabled={authBusy} onClick={async () => {
+                setAuthBusy(true); setAuthMsg(null);
+                const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPw });
+                setAuthBusy(false); if (error) setAuthMsg({ bad: true, text: error.message });
+              }} style={{ flex: 1, height: 42, borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer" }}>Sign in</button>
+              <button disabled={authBusy} onClick={async () => {
+                setAuthBusy(true); setAuthMsg(null);
+                const { data, error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPw });
+                setAuthBusy(false);
+                if (error) setAuthMsg({ bad: true, text: error.message });
+                else if (!data.session) setAuthMsg({ bad: false, text: "Check your email to confirm the account, then sign in." });
+              }} style={{ flex: 1, height: 42, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.ink, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer" }}>Create account</button>
+            </div>
+          </>)}
+        </Card>
+      </>}
 
       <SectionLabel icon={<RotateCcw size={13} />}>Backups</SectionLabel>
       <Card style={{ padding: 16, marginBottom: 16 }}>
@@ -3002,6 +3086,7 @@ export default function App() {
   // stored shape ever genuinely changes, migrate it here rather than deleting it.
   useState(() => { if (loadLS("wa_ver", null) !== VER) saveLS("wa_ver", VER); return null; });
   useAutoSnapshot();
+  const sync = useSync();
   const [profile, setProfile] = usePersist("wa_profile", { onboarded: false });
   const [weightLog, setWeightLog] = usePersist("wa_weightlog", {});
   const [programs, setPrograms] = usePersist("wa_programs", []);
@@ -3049,7 +3134,7 @@ export default function App() {
             </button>); })}
         </div>
       </div>
-      {settingsOpen && <SettingsSheet profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} equipment={equipment} setEquipment={setEquipment} fin={fin} setFin={setFin} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsSheet profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} equipment={equipment} setEquipment={setEquipment} fin={fin} setFin={setFin} sync={sync} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
