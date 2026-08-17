@@ -68,9 +68,93 @@ function usePersist(key, initial) {
   return [s, setS];
 }
 
+/* ===== backups =====
+   Everything lives in this browser, so a bad change or a stray reset is unrecoverable
+   without copies. Snapshots are taken automatically while the app is open and kept under
+   their own key, so they survive a reset of the live data. They do not survive losing the
+   browser itself — that is what the exported file is for. */
+const DATA_KEYS = ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment", "wa_habits", "wa_read", "wa_finance"];
+const SNAP_KEY = "wa_snapshots";
+const SNAP_EVERY_MS = 60000;
+const SNAP_RECENT = 6;   // always keep the last few, however close together
+const SNAP_DAYS = 7;     // plus the newest from each of the last week's days
+
+const collectData = () => {
+  const o = {};
+  DATA_KEYS.forEach((k) => { const v = localStorage.getItem(k); if (v != null) o[k] = v; });
+  return o;
+};
+const readSnaps = () => { try { const r = localStorage.getItem(SNAP_KEY); const a = r ? JSON.parse(r) : []; return Array.isArray(a) ? a : []; } catch { return []; } };
+const pruneSnaps = (snaps) => {
+  const sorted = [...snaps].sort((a, b) => b.t.localeCompare(a.t));
+  const keep = new Set(sorted.slice(0, SNAP_RECENT).map((s) => s.t));
+  const days = new Set();
+  sorted.forEach((s) => { const d = s.t.slice(0, 10); if (!days.has(d) && days.size < SNAP_DAYS) { days.add(d); keep.add(s.t); } });
+  return sorted.filter((s) => keep.has(s.t));
+};
+// Returns true if a new snapshot was written. Skips when nothing changed, so an idle app
+// does not churn through its storage quota.
+function writeSnapshot() {
+  try {
+    const data = collectData();
+    const payload = JSON.stringify(data);
+    const snaps = readSnaps();
+    const newest = snaps.length ? snaps.reduce((a, b) => (a.t > b.t ? a : b)) : null;
+    if (newest && JSON.stringify(newest.data) === payload) return false;
+    let attempt = pruneSnaps([...snaps, { t: new Date().toISOString(), data }]);
+    for (;;) {
+      try { localStorage.setItem(SNAP_KEY, JSON.stringify(attempt)); return true; }
+      catch { if (attempt.length <= 1) return false; attempt = attempt.slice(0, -1); } // drop oldest, retry
+    }
+  } catch { return false; }
+}
+const applyData = (data) => DATA_KEYS.forEach((k) => { if (data[k] != null) localStorage.setItem(k, data[k]); else localStorage.removeItem(k); });
+function useAutoSnapshot() {
+  useEffect(() => {
+    writeSnapshot();
+    const id = setInterval(() => { if (!document.hidden) writeSnapshot(); }, SNAP_EVERY_MS);
+    // catch the state you leave the app in, which is usually right after a session
+    const onVis = () => { if (document.hidden) writeSnapshot(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+}
+function exportBackup() {
+  const body = JSON.stringify({ app: "WorkoutAPP2", version: VER, exportedAt: new Date().toISOString(), data: collectData() }, null, 2);
+  const url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = `workout-backup-${ymd(new Date())}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function importBackup(file, done) {
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const parsed = JSON.parse(String(r.result));
+      const data = parsed && parsed.data ? parsed.data : parsed;
+      if (!data || typeof data !== "object" || !DATA_KEYS.some((k) => data[k] != null)) return done(false);
+      writeSnapshot();          // keep a way back from the import itself
+      applyData(data);
+      done(true);
+    } catch { done(false); }
+  };
+  r.onerror = () => done(false);
+  r.readAsText(file);
+}
+const timeAgo = (iso) => {
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 90) return "just now";
+  const m = Math.round(s / 60); if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60); if (h < 24) return `${h} hour${h === 1 ? "" : "s"} ago`;
+  const d = Math.round(h / 24); return `${d} day${d === 1 ? "" : "s"} ago`;
+};
+
 /* ===== units ===== */
 const KG_TO_LB = 2.20462;
-const fmtW = (kg, u) => (u === "lb" ? kg * KG_TO_LB : kg);
+// Coerced rather than trusted: a restored or imported backup can carry a partial profile,
+// and a missing weight should read as 0.0, not white-screen the app.
+const fmtW = (kg, u) => { const n = Number(kg) || 0; return u === "lb" ? n * KG_TO_LB : n; };
 const wStr = (kg, u) => fmtW(kg, u).toFixed(1);
 const commas = (n) => Math.round(n).toLocaleString();
 
@@ -2098,6 +2182,10 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
   const [view, setView] = useState("main");
   const [confirmReset, setConfirmReset] = useState(false);
   const [editingEquip, setEditingEquip] = useState(false);
+  const [snaps] = useState(() => readSnaps());
+  const [confirmSnap, setConfirmSnap] = useState(null);
+  const [restoreErr, setRestoreErr] = useState(null);
+  const fileRef = useRef(null);
   const setP = (k, v) => setProfile((p) => ({ ...p, [k]: v }));
   const u = profile.unit;
   const active = activeProgram(programs);
@@ -2174,6 +2262,41 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
         <Row label="Reminder" sub="Nudge to log your weigh-in"><Switch on={profile.reminderOn} onToggle={() => setP("reminderOn", !profile.reminderOn)} /></Row>
         <Row label="Time" last><div style={pill}><input type="time" value={profile.reminderTime || "07:30"} onChange={(e) => setP("reminderTime", e.target.value)} style={{ border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 14, color: C.ink }} /><Pencil size={12} color={C.faint} /></div></Row>
         <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.faint, padding: "0 0 12px", lineHeight: 1.45 }}>Note: real phone notifications need the installed app version — this saves your preferred time for now.</div>
+      </Card>
+
+      <SectionLabel icon={<RotateCcw size={13} />}>Backups</SectionLabel>
+      <Card style={{ padding: 16, marginBottom: 16 }}>
+        <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, lineHeight: 1.55 }}>
+          Saved automatically every minute while the app is open, and again when you close it. Kept in this browser, so export a file too if it matters.
+        </div>
+        <div style={{ display: "flex", gap: 8, margin: "14px 0 4px" }}>
+          <button onClick={exportBackup} style={{ flex: 1, height: 40, borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 13.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Export a file</button>
+          <button onClick={() => fileRef.current?.click()} style={{ flex: 1, height: 40, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.ink, fontFamily: SANS, fontSize: 13.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Import a file</button>
+        </div>
+        <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: "none" }}
+          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) importBackup(f, (ok) => ok ? window.location.reload() : setRestoreErr("That file could not be read as a backup.")); }} />
+        {restoreErr && <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.red, marginTop: 8 }}>{restoreErr}</div>}
+        {snaps.length > 0 && (
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}` }}>
+            <div style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, marginBottom: 9 }}>{snaps.length} snapshot{snaps.length === 1 ? "" : "s"} · newest first</div>
+            {snaps.slice().sort((a, b) => b.t.localeCompare(a.t)).map((s) => (
+              <div key={s.t} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "8px 0" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink }}>{timeAgo(s.t)}</div>
+                  <div style={{ fontFamily: MONO, fontSize: 10.5, color: NEU.n600, marginTop: 2 }}>{new Date(s.t).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
+                </div>
+                {confirmSnap === s.t ? (
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    <button onClick={() => setConfirmSnap(null)} style={{ height: 32, padding: "0 11px", borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 12.5, cursor: "pointer" }}>Cancel</button>
+                    <button onClick={() => { writeSnapshot(); applyData(s.data); window.location.reload(); }} style={{ height: 32, padding: "0 11px", borderRadius: 8, border: `1px solid ${C.amber}`, background: "none", color: C.amber, fontFamily: SANS, fontSize: 12.5, fontWeight: 500, cursor: "pointer" }}>Confirm</button>
+                  </div>
+                ) : (
+                  <button onClick={() => setConfirmSnap(s.t)} style={{ height: 32, padding: "0 12px", borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 12.5, fontWeight: 500, cursor: "pointer", flexShrink: 0, WebkitTapHighlightColor: "transparent" }}>Restore</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       <SectionLabel>Data</SectionLabel>
@@ -2873,7 +2996,12 @@ function LockedScreen({ label, Icon, blurb }) {
 }
 
 export default function App() {
-  useState(() => { const v = loadLS("wa_ver", null); if (v !== VER) { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history"].forEach((k) => localStorage.removeItem(k)); } catch {} saveLS("wa_ver", VER); } return null; });
+  // This used to delete profile, weigh-ins, programs and history whenever VER changed — a
+  // silent, unrecoverable wipe triggered by editing one constant. Fine for a prototype,
+  // unacceptable now it holds real training history. It only records the version now; if a
+  // stored shape ever genuinely changes, migrate it here rather than deleting it.
+  useState(() => { if (loadLS("wa_ver", null) !== VER) saveLS("wa_ver", VER); return null; });
+  useAutoSnapshot();
   const [profile, setProfile] = usePersist("wa_profile", { onboarded: false });
   const [weightLog, setWeightLog] = usePersist("wa_weightlog", {});
   const [programs, setPrograms] = usePersist("wa_programs", []);
