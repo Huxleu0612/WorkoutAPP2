@@ -302,20 +302,31 @@ const kFmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round
    retroactively make last month look like it was missed. */
 /* Traffic-light states. Stored as strings so a value is self-describing in the data:
      green  — done, counts in full
-     orange — in progress, counts as half
-     red    — did not complete, and deliberately excluded from scoring. This is the
-              "I was out until midnight, that was my call" case: it is not a miss held
-              against you, it is a day that does not count either way.
-   Anything unmarked on a past day counts as a miss.
+     orange — "not able": the day was not a fair test, so it is excluded from scoring
+              entirely, both sides of the fraction. This is the "out until midnight, so
+              5:30 was never happening" case — not a failure, just a day that does not count.
+     red    — missed. Counted, and counted as zero.
+   Anything unmarked on a past day counts as a miss too.
    Legacy `true` values from before this existed read as green, so nothing already logged
    changes meaning or is lost. */
 const HABIT_GREEN = "green", HABIT_ORANGE = "orange", HABIT_RED = "red";
 const habitState = (h, key) => { const v = h?.ticks?.[key]; return v === true ? HABIT_GREEN : v || null; };
-const habitScore = (state) => (state === HABIT_GREEN ? 1 : state === HABIT_ORANGE ? 0.5 : 0);
-const habitCounts = (state) => state !== HABIT_RED; // red drops out of the denominator too
+const habitScore = (state) => (state === HABIT_GREEN ? 1 : 0);
+const habitCounts = (state) => state !== HABIT_ORANGE; // "not able" leaves the denominator too
 const HABIT_CYCLE = [null, HABIT_GREEN, HABIT_ORANGE, HABIT_RED];
 const nextHabitState = (cur) => HABIT_CYCLE[(HABIT_CYCLE.indexOf(cur ?? null) + 1) % HABIT_CYCLE.length];
 const habitStateColor = (state) => (state === HABIT_GREEN ? C.green : state === HABIT_ORANGE ? C.amber : state === HABIT_RED ? C.red : NEU.n700);
+// One place for the wording, so Today and Habits can never drift apart.
+const HABIT_LABEL = { [HABIT_GREEN]: "Done", [HABIT_ORANGE]: "Not able", [HABIT_RED]: "Missed" };
+const habitStateLabel = (state) => HABIT_LABEL[state] || null;
+// Cycles a habit's state for one day, clearing the entry entirely when it comes back round.
+const cycleHabitOn = (setHabits, id, key) => setHabits((hs) => hs.map((h) => {
+  if (h.id !== id) return h;
+  const next = nextHabitState(habitState(h, key));
+  const ticks = { ...h.ticks };
+  if (next == null) delete ticks[key]; else ticks[key] = next;
+  return { ...h, ticks };
+}));
 
 const habitsOn = (habits, key) => (Array.isArray(habits) ? habits : []).filter((h) => ymd(new Date(h.createdAt)) <= key && (!h.archivedAt || key < ymd(new Date(h.archivedAt))));
 const habitDayPct = (habits, key) => {
@@ -324,11 +335,11 @@ const habitDayPct = (habits, key) => {
   return Math.round((on.reduce((n, h) => n + habitScore(habitState(h, key)), 0) / on.length) * 100);
 };
 // today only breaks a streak once the day is over, so an untouched morning doesn't read as a loss
-// Green keeps a streak. Orange and red neither extend nor break it — a half-done or
-// deliberately-skipped day just does not count.
+// Green keeps a streak going. "Not able" is neutral — it neither extends nor breaks a run,
+// since the day was never a fair test. A miss breaks it.
 const habitStreak = (h) => {
   const held = (d) => habitState(h, ymd(d)) === HABIT_GREEN;
-  const neutral = (d) => { const s = habitState(h, ymd(d)); return s === HABIT_ORANGE || s === HABIT_RED; };
+  const neutral = (d) => habitState(h, ymd(d)) === HABIT_ORANGE;
   let d = startOfDay(new Date());
   if (!held(d)) d = addDays(d, -1);
   let n = 0;
@@ -941,7 +952,7 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
   // Only genuinely untouched habits are "open". Green is done, and orange or red have both
   // already had a decision made about them.
   const openHabits = habitsToday.filter((h) => habitState(h, todayKey) == null);
-  const tickHabit = (id) => setHabits((hs) => hs.map((h) => h.id !== id ? h : { ...h, ticks: { ...h.ticks, [todayKey]: HABIT_GREEN } }));
+  const cycleHabit = (id) => cycleHabitOn(setHabits, id, todayKey);
   const readLeft = Math.max(0, (read.goalMin || 20) - readMin(read, todayKey));
 
   const ndi = nextDayIndex(history, active);
@@ -1073,20 +1084,26 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
             <BookOpen size={17} color={readLeft > 0 ? ACC : C.green} />
             <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>{readLeft > 0 ? `${readLeft} min of reading left` : "Reading done today"}</span>
           </button>
-          {habitsToday.length > 0 && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: openHabits.length ? 11 : 0 }}>
+          {habitsToday.length > 0 && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 11 }}>
             <button onClick={() => go("habits")} style={{ display: "flex", alignItems: "center", gap: 9, flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
               <Target size={17} color={openHabits.length ? ACC : C.green} />
-              <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>{openHabits.length ? `${openHabits.length} habit${openHabits.length === 1 ? "" : "s"} left` : "All habits done today"}</span>
+              <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>{openHabits.length ? `${openHabits.length} habit${openHabits.length === 1 ? "" : "s"} left` : "All habits marked"}</span>
             </button>
-            {openHabits.length > 0 && <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, flexShrink: 0 }}>Tap to tick</span>}
+            <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, flexShrink: 0 }}>Tap to change</span>
           </div>}
-          {openHabits.length > 0 && (
+          {/* Every habit stays listed, not just the unmarked ones, so a chip can be cycled
+              back and forth here instead of disappearing on the first tap. */}
+          {habitsToday.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {openHabits.map((h) => (
-                <button key={h.id} onClick={() => tickHabit(h.id)} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 11px", borderRadius: 99, border: "none", background: NEU.n900, color: C.ink, fontFamily: SANS, fontSize: 11.5, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
-                  <Circle size={13} color={NEU.n600} /> {h.name}
-                </button>
-              ))}
+              {habitsToday.map((h) => {
+                const st = habitState(h, todayKey), col = habitStateColor(st);
+                return (
+                  <button key={h.id} onClick={() => cycleHabit(h.id)} aria-label={`${h.name} — ${habitStateLabel(st) || "not marked"}, tap to change`}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 11px", borderRadius: 99, border: st ? `1px solid ${col}` : "none", background: NEU.n900, color: st ? col : C.ink, fontFamily: SANS, fontSize: 11.5, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                    {st ? <CheckCircle size={13} weight="fill" color={col} /> : <Circle size={13} color={NEU.n600} />} {h.name}
+                  </button>
+                );
+              })}
             </div>
           )}
         </Card>
@@ -2552,13 +2569,7 @@ function Habits({ habits, setHabits }) {
   const countedToday = active.filter((h) => habitCounts(habitState(h, todayKey))).length;
   // Tapping cycles unmarked -> green -> orange -> red -> unmarked, so every state is
   // reachable with repeat taps and nothing needs a long-press or a menu.
-  const cycle = (id) => setHabits((hs) => hs.map((h) => {
-    if (h.id !== id) return h;
-    const next = nextHabitState(habitState(h, todayKey));
-    const ticks = { ...h.ticks };
-    if (next == null) delete ticks[todayKey]; else ticks[todayKey] = next;
-    return { ...h, ticks };
-  }));
+  const cycle = (id) => cycleHabitOn(setHabits, id, todayKey);
   const save = (id, patch) => setHabits((hs) => id ? hs.map((h) => h.id === id ? { ...h, ...patch } : h) : [...hs, { id: `hb_${Date.now()}`, createdAt: new Date().toISOString(), ticks: {}, visibleToFriends: false, ...patch }]);
   const remove = (id) => setHabits((hs) => hs.filter((h) => h.id !== id));
 
@@ -2587,7 +2598,7 @@ function Habits({ habits, setHabits }) {
           {active.map((h, i) => {
             const st = habitState(h, todayKey), streak = habitStreak(h);
             const dim = st === HABIT_GREEN || st === HABIT_RED;
-            const label = st === HABIT_GREEN ? "Done" : st === HABIT_ORANGE ? "In progress" : st === HABIT_RED ? "Did not complete · not counted" : null;
+            const label = habitStateLabel(st);
             return (
               <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 0", borderBottom: i === active.length - 1 ? "none" : `1px solid ${C.lineSoft}` }}>
                 <button onClick={() => cycle(h.id)} aria-label={`${h.name} — ${label || "not marked"}, tap to change`} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", flexShrink: 0, WebkitTapHighlightColor: "transparent" }}>
@@ -2602,12 +2613,12 @@ function Habits({ habits, setHabits }) {
             );
           })}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, paddingTop: 12, marginTop: 2, borderTop: `1px solid ${C.lineSoft}`, paddingBottom: 12 }}>
-            {[[C.green, "Done"], [C.amber, "In progress"], [C.red, "Did not complete"]].map(([c, t]) => (
+            {[[C.green, HABIT_LABEL[HABIT_GREEN]], [C.amber, HABIT_LABEL[HABIT_ORANGE]], [C.red, HABIT_LABEL[HABIT_RED]]].map(([c, t]) => (
               <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: SANS, fontSize: 11, color: NEU.n600 }}>
                 <span style={{ width: 8, height: 8, borderRadius: 4, background: c }} />{t}
               </span>
             ))}
-            <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, width: "100%" }}>Tap a circle to cycle. Red is your call and is left out of the score entirely.</span>
+            <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, width: "100%" }}>Tap a circle to cycle. Not able leaves the day out of your score entirely — it was never a fair test.</span>
           </div>
         </Card>
       )}
@@ -2691,6 +2702,7 @@ function Read({ read, setRead }) {
   const [draftSource, setDraftSource] = useState("");
   const [draftTag, setDraftTag] = useState(null);
   const [tagOpen, setTagOpen] = useState(false);
+  const [editGoal, setEditGoal] = useState(false);
   const [q, setQ] = useState("");
   const todayKey = ymd(new Date());
   const goal = read.goalMin || 20;
@@ -2730,17 +2742,19 @@ function Read({ read, setRead }) {
           ))}
           {doneMin > 0 && <button onClick={() => setRead((r) => ({ ...r, log: { ...r.log, [todayKey]: 0 } }))} style={{ width: 42, height: 36, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.faint, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }} aria-label="Clear today"><RotateCcw size={14} /></button>}
         </div>
-        {/* Editable so the target can be matched to whatever the reading habit actually says. */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 13, paddingTop: 12, borderTop: `1px solid ${C.lineSoft}` }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontFamily: SANS, fontSize: 13, color: C.ink }}>Daily target</div>
-            <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 2 }}>Counts as done at {goal} min</div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 9, flexShrink: 0 }}>
-            <MiniStep onClick={() => setRead((r) => ({ ...r, goalMin: Math.max(5, (r.goalMin || 20) - 5) }))}><Minus size={15} /></MiniStep>
-            <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink, minWidth: 52, textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{goal} min</span>
-            <MiniStep onClick={() => setRead((r) => ({ ...r, goalMin: Math.min(240, (r.goalMin || 20) + 5) }))}><Plus size={15} /></MiniStep>
-          </div>
+        {/* Tucked behind a pencil — the target is set once in a while, not every day, so it
+            does not deserve permanent space next to the controls you use daily. */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 11 }}>
+          <span style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600 }}>Target {goal} min a day</span>
+          {editGoal ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0 }}>
+              <button onClick={() => setRead((r) => ({ ...r, goalMin: Math.max(5, (r.goalMin || 20) - 5) }))} aria-label="Less" style={{ width: 26, height: 26, borderRadius: 7, border: `1px solid ${C.line}`, background: "none", color: C.ink, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Minus size={13} /></button>
+              <button onClick={() => setRead((r) => ({ ...r, goalMin: Math.min(240, (r.goalMin || 20) + 5) }))} aria-label="More" style={{ width: 26, height: 26, borderRadius: 7, border: `1px solid ${C.line}`, background: "none", color: C.ink, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Plus size={13} /></button>
+              <button onClick={() => setEditGoal(false)} style={{ height: 26, padding: "0 10px", borderRadius: 7, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 11.5, fontWeight: 500, cursor: "pointer" }}>Done</button>
+            </div>
+          ) : (
+            <button onClick={() => setEditGoal(true)} aria-label="Edit daily target" style={{ width: 26, height: 26, borderRadius: 7, border: "none", background: "none", color: C.faint, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Pencil size={13} /></button>
+          )}
         </div>
       </div>
 
