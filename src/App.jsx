@@ -558,14 +558,17 @@ function weekSessionSlots(history, program, date) {
   return slots;
 }
 // how many scheduled sessions should have happened by today (pause-aware)
-function scheduledSoFar(p) {
+function scheduledSoFar(p, history) {
   if (!p || !p.startedAt || !(p.scheduleDays || []).length) return 0;
   const start = startOfDay(new Date(p.startedAt));
   const today = startOfDay(new Date());
+  // Today counts only once it has actually been trained. Before that it is not owed yet, so
+  // counting it would drag consistency down all day. After it, leaving it out reported more
+  // sessions done than were ever scheduled — the "2 of 1 workouts" nonsense.
+  const trainedToday = (history || []).some((h) => h.programId === p.id && h.date === ymd(today));
+  const end = trainedToday ? addDays(today, 1) : today;
   let n = 0, guard = 0;
-  // Stops before today on purpose. A session scheduled for tonight is not owed yet, so
-  // counting it would drag consistency down all day and only recover after you trained.
-  for (let d = new Date(start); d < today && guard < 2000; d = addDays(d, 1), guard++) if (p.scheduleDays.includes(d.getDay())) n++;
+  for (let d = new Date(start); d < end && guard < 2000; d = addDays(d, 1), guard++) if (p.scheduleDays.includes(d.getDay())) n++;
   const pausedWeeks = ((p.pausedMs || 0) + (p.pausedAt ? Date.now() - new Date(p.pausedAt).getTime() : 0)) / (7 * DAYMS);
   return Math.max(0, n - Math.round(pausedWeeks * p.scheduleDays.length));
 }
@@ -882,6 +885,7 @@ function InfoModal({ styleKey, onClose }) {
 function Onboarding({ onDone }) {
   const [f, setF] = useState({ name: "", birthDate: "", unit: "kg", height: "175", current: "80", goal: "75" });
   const [pace, setPace] = useState("steady");
+  const [step, setStep] = useState(0);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const hUnit = f.unit === "lb" ? "" : "cm"; // height stays cm for simplicity
   const num = (s) => parseFloat(s);
@@ -889,6 +893,13 @@ function Onboarding({ onDone }) {
   const inp = { width: "100%", height: 52, borderRadius: 12, border: `1.5px solid ${C.line}`, background: C.card, padding: "0 14px", fontFamily: SANS, fontSize: 16, color: C.ink, outline: "none" };
   const lab = { fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.ink, margin: "0 0 7px 2px", display: "block" };
   const toKg = (s) => (f.unit === "lb" ? num(s) / KG_TO_LB : num(s));
+  const finish = () => onDone({
+    name: f.name.trim(), username: f.name.trim().toLowerCase().replace(/\s+/g, ""), birthDate: f.birthDate,
+    heightCm: Math.round(num(f.height)), heightUnit: "cm", currentKg: toKg(f.current), goalKg: toKg(f.goal),
+    unit: f.unit, rateMag: (deriveGoal({ currentKg: toKg(f.current), goalKg: toKg(f.goal) }, toKg(f.current)).type === "maintain" ? 0 : (pace === "steady" ? 0.25 : 0.5)),
+    reminderOn: false, reminderTime: "07:30", onboarded: true, createdAt: new Date().toISOString(),
+  });
+  if (step === 1) return <OnboardingAccount name={f.name.trim()} onBack={() => setStep(0)} onFinish={finish} />;
   return (
     <div style={{ minHeight: "100vh", background: C.page, display: "flex", justifyContent: "center" }}>
       <div style={{ width: "100%", maxWidth: 430, padding: "40px 20px 60px" }}>
@@ -931,11 +942,92 @@ function Onboarding({ onDone }) {
           );
         })()}
         <div style={{ height: 26 }} />
-        <button disabled={!ready} onClick={() => onDone({
-          name: f.name.trim(), username: f.name.trim().toLowerCase().replace(/\s+/g, ""), birthDate: f.birthDate,
-          heightCm: Math.round(num(f.height)), heightUnit: "cm", currentKg: toKg(f.current), goalKg: toKg(f.goal),
-          unit: f.unit, rateMag: (deriveGoal({ currentKg: toKg(f.current), goalKg: toKg(f.goal) }, toKg(f.current)).type === "maintain" ? 0 : (pace === "steady" ? 0.25 : 0.5)), reminderOn: false, reminderTime: "07:30", onboarded: true, createdAt: new Date().toISOString(),
-        })} style={{ width: "100%", height: 58, borderRadius: 13, border: "none", cursor: ready ? "pointer" : "default", background: ready ? ACC : C.line, color: ready ? C.page : C.sub, fontFamily: SANS, fontSize: 16, fontWeight: 650, WebkitTapHighlightColor: "transparent" }}>Start training</button>
+        <button disabled={!ready} onClick={() => (syncConfigured ? setStep(1) : finish())}
+          style={{ width: "100%", height: 58, borderRadius: 13, border: "none", cursor: ready ? "pointer" : "default", background: ready ? ACC : C.line, color: ready ? C.page : C.sub, fontFamily: SANS, fontSize: 16, fontWeight: 650, WebkitTapHighlightColor: "transparent" }}>
+          {syncConfigured ? "Continue" : "Start training"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* Step two of onboarding. An account is genuinely optional — the app is local-first and works
+   completely without one — so this has to say what an account is *for* rather than demand it,
+   and be specific about what a friend can and cannot see before anyone signs up. */
+function OnboardingAccount({ name, onBack, onFinish }) {
+  const [mode, setMode] = useState("create");
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const inp = { width: "100%", height: 52, borderRadius: 12, border: `1.5px solid ${C.line}`, background: C.card, padding: "0 14px", fontFamily: SANS, fontSize: 16, color: C.ink, outline: "none" };
+  const lab = { fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.ink, margin: "0 0 7px 2px", display: "block" };
+  const weak = pw.length > 0 && pw.length < 10;
+
+  const go = async () => {
+    setBusy(true); setMsg(null);
+    const e = email.trim().toLowerCase();
+    const fn = mode === "create" ? supabase.auth.signUp({ email: e, password: pw }) : supabase.auth.signInWithPassword({ email: e, password: pw });
+    const { data, error } = await fn;
+    setBusy(false);
+    if (error) { setMsg({ bad: true, text: error.message }); return; }
+    if (mode === "create" && !data.session) { setMsg({ text: "Check your email to confirm the account, then sign in." }); setMode("signin"); return; }
+    onFinish();
+  };
+
+  const Row = ({ icon, children }) => (
+    <div style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "7px 0" }}>
+      <div style={{ flexShrink: 0, marginTop: 1 }}>{icon}</div>
+      <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink, lineHeight: 1.5 }}>{children}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.page, display: "flex", justifyContent: "center" }}>
+      <div style={{ width: "100%", maxWidth: 430, padding: "40px 20px 60px" }}>
+        <button onClick={onBack} style={backBtn}><ChevronLeft size={18} /> Back</button>
+        <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: "6px 0 6px", letterSpacing: -0.6 }}>Train with friends?</h1>
+        <p style={{ fontFamily: SANS, fontSize: 14.5, color: C.sub, margin: "0 0 20px", lineHeight: 1.5 }}>
+          Optional. Everything works without an account — your data lives on this phone either way. An account is only for keeping it across devices and comparing habits with people you invite.
+        </p>
+
+        <Card style={{ padding: "12px 15px", marginBottom: 12 }}>
+          <div style={{ ...lab, margin: "2px 0 4px" }}>What a friend can see</div>
+          <Row icon={<Target size={15} color={C.green} />}>The <b>percentage</b> of habits you hit this month — and only habits you switch on individually. Off by default.</Row>
+          <Row icon={<Quotes size={15} color={C.green} />}>Quotes you choose to write down in Read.</Row>
+        </Card>
+
+        <Card style={{ padding: "12px 15px", marginBottom: 18 }}>
+          <div style={{ ...lab, margin: "2px 0 4px" }}>What they can never see</div>
+          <Row icon={<X size={15} color={C.red} />}>Your finances. There is no sharing switch for it anywhere in the app.</Row>
+          <Row icon={<X size={15} color={C.red} />}>Your body weight, your training history and your lifts.</Row>
+          <Row icon={<X size={15} color={C.red} />}>Habit names, or which days you hit and missed. Only the number leaves your phone.</Row>
+        </Card>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          {[["create", "Create account"], ["signin", "I have one"]].map(([k, t]) => (
+            <button key={k} onClick={() => { setMode(k); setMsg(null); }} style={{ flex: 1, height: 40, borderRadius: 10, cursor: "pointer", border: `1.5px solid ${mode === k ? AC.base : C.line}`, background: "none", color: mode === k ? ACC : C.sub, fontFamily: SANS, fontSize: 14, fontWeight: 500, WebkitTapHighlightColor: "transparent" }}>{t}</button>
+          ))}
+        </div>
+
+        <label style={lab}>Email</label>
+        <input style={{ ...inp, marginBottom: 12 }} type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+        <label style={lab}>Password</label>
+        <input style={inp} type="password" autoComplete={mode === "create" ? "new-password" : "current-password"} value={pw} onChange={(e) => setPw(e.target.value)} placeholder={mode === "create" ? "At least 10 characters" : "Your password"} />
+        {mode === "create" && (
+          <div style={{ fontFamily: SANS, fontSize: 12, color: weak ? C.amber : NEU.n600, marginTop: 8, lineHeight: 1.5 }}>
+            {weak ? "Ten characters or more, please." : "Use a password you have never used anywhere else. Three unrelated words is stronger than one clever word with symbols, and easier to remember."}
+          </div>
+        )}
+        {msg && <div style={{ fontFamily: SANS, fontSize: 13, color: msg.bad ? C.red : C.green, marginTop: 10, lineHeight: 1.45 }}>{msg.text}</div>}
+
+        <div style={{ height: 20 }} />
+        <button disabled={busy || !email.trim() || pw.length < (mode === "create" ? 10 : 1)} onClick={go}
+          style={{ width: "100%", height: 56, borderRadius: 13, border: "none", cursor: "pointer", background: ACC, color: C.page, fontFamily: SANS, fontSize: 16, fontWeight: 650, opacity: busy || !email.trim() || pw.length < (mode === "create" ? 10 : 1) ? 0.45 : 1, WebkitTapHighlightColor: "transparent" }}>
+          {busy ? "One moment…" : mode === "create" ? "Create account and start" : "Sign in and start"}
+        </button>
+        <button onClick={onFinish} style={{ width: "100%", height: 48, marginTop: 10, borderRadius: 13, border: "none", background: "none", color: C.sub, fontFamily: SANS, fontSize: 14.5, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Not now — just train on this phone</button>
+        <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, textAlign: "center", marginTop: 12, lineHeight: 1.5 }}>You can add an account later in Settings, and nothing is shared until you invite someone.</div>
       </div>
     </div>
   );
@@ -1194,7 +1286,10 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
           <div style={{ height: 5, background: C.onDarkLine, borderRadius: 3, marginBottom: 18, overflow: "hidden" }}><div style={{ width: `${Math.min(100, (programWeek(active) / active.weeks) * 100)}%`, height: "100%", background: paused ? C.amber : ACC, borderRadius: 3 }} /></div>
           {(() => {
             const done = sessionsFor(history, active.id).length;
-            const scheduled = scheduledSoFar(active);
+            // Never let the denominator fall below what was actually completed. You cannot
+            // have trained more sessions than were ever scheduled, so if the two disagree
+            // it is the schedule count that is wrong, and printing "2 of 1" is indefensible.
+            const scheduled = Math.max(done, scheduledSoFar(active, history));
             const pct = scheduled ? Math.min(100, Math.round((done / scheduled) * 100)) : 0;
             if (scheduled === 0) return (
               <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
