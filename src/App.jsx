@@ -1105,12 +1105,12 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
     const afterStart = startedAt0 ? startOfDay(dt) >= startedAt0 : false;
     const wDone = scheduled && slots.has(key);
     const missed = scheduled && past && !wDone && afterStart && !paused;
-    // The week tracker's bar is the share of that day's open items that got closed: the
-    // scheduled workout, the weigh-in, the reading goal, and every habit that existed then.
-    const hOn = habitsOn(habits, key);
-    const items = 2 + (scheduled ? 1 : 0) + hOn.length;
-    const closed = (weighed ? 1 : 0) + (wDone ? 1 : 0) + (readMet(read, key) ? 1 : 0) + hOn.reduce((n, h) => n + habitScore(habitState(h, key)), 0);
-    const pct = Math.round((closed / items) * 100);
+    // The bar is habit completion for that day, and nothing else. It used to fold in the
+    // weigh-in, the reading goal and the workout, which meant ticking every habit topped out
+    // around half and there was no way to fill it — the bar appeared broken because it was
+    // measuring something nobody could read off it. The workout has its own icon underneath,
+    // so this reuses the exact function the Habits heat grid uses and the two now agree.
+    const pct = habitDayPct(habits, key) ?? 0;
     return { dt, key, dow, aidx, scheduled, done, wDone, weighed, missed, past, pct, isToday: sameDay(dt, new Date()) };
   });
   const now = new Date();
