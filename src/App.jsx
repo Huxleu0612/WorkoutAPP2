@@ -152,6 +152,41 @@ function importBackup(file, done) {
   r.onerror = () => done(false);
   r.readAsText(file);
 }
+/* ===== update watcher =====
+   Installed to a home screen, this never re-fetches on its own — iOS in particular will keep
+   resuming the copy it first loaded, so a fix can be live for days and the phone stays on the
+   old build. This compares the bundle filename the page is actually running against the one
+   the server is serving now. Vite hashes that filename per build, so a mismatch means a newer
+   build exists. It offers a reload rather than taking one, since forcing it mid-session would
+   throw away an in-progress workout. */
+function useUpdateWatcher() {
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    const running = document.querySelector('script[type="module"][src*="/assets/"]')?.getAttribute("src");
+    if (!running) return; // dev server, nothing hashed to compare
+    let alive = true;
+    const check = async () => {
+      try {
+        const html = await (await fetch(`/?v=${Date.now()}`, { cache: "no-store" })).text();
+        const live = (html.match(/src="(\/assets\/index-[^"]+\.js)"/) || [])[1];
+        if (alive && live && live !== running) setStale(true);
+      } catch {} // offline is not staleness
+    };
+    check();
+    const id = setInterval(check, 300000);
+    const onVis = () => { if (!document.hidden) check(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { alive = false; clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+  return stale;
+}
+
+const UpdateBar = ({ onReload }) => (
+  <button onClick={onReload} style={{ flexShrink: 0, width: "100%", border: "none", borderBottom: `1px solid ${AC.a800}`, background: AC.a900, color: NEU.n200, padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, cursor: "pointer", fontFamily: SANS, fontSize: 13, WebkitTapHighlightColor: "transparent" }}>
+    <RotateCw size={14} color={AC.a300} /> A newer version is ready — tap to update
+  </button>
+);
+
 /* ===== cloud sync =====
    Entirely optional. With no Supabase config the app behaves exactly as it always has:
    local only, no sign-in, no network. Signing in is what turns sync on. */
@@ -3522,6 +3557,7 @@ export default function App() {
   useState(() => { if (loadLS("wa_ver", null) !== VER) saveLS("wa_ver", VER); return null; });
   useAutoSnapshot();
   const sync = useSync();
+  const updateReady = useUpdateWatcher();
   const [profile, setProfile] = usePersist("wa_profile", { onboarded: false });
   const [weightLog, setWeightLog] = usePersist("wa_weightlog", {});
   const [programs, setPrograms] = usePersist("wa_programs", []);
@@ -3551,6 +3587,7 @@ export default function App() {
   return (
     <div className="app-shell" style={{ background: C.page, display: "flex", justifyContent: "center", fontFamily: SANS }}>
       <div style={{ width: "100%", maxWidth: 430, background: C.page, display: "flex", flexDirection: "column", height: "100%" }}>
+        {updateReady && <UpdateBar onReload={() => window.location.reload()} />}
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
           {pillar?.locked && <LockedScreen label={pillar.label} Icon={pillar.Icon} blurb={pillar.blurb} />}
           {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} habits={habits} setHabits={setHabits} read={read} go={setTab} onSettings={openSettings} />}
