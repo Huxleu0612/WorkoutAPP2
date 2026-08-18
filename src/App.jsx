@@ -159,6 +159,13 @@ function importBackup(file, done) {
    the server is serving now. Vite hashes that filename per build, so a mismatch means a newer
    build exists. It offers a reload rather than taking one, since forcing it mid-session would
    throw away an in-progress workout. */
+// Vite hashes the bundle filename per build, so this is a truthful identifier for whatever
+// code is actually running. Reads "dev" against the dev server, which is not hashed.
+const buildId = () => {
+  const s = document.querySelector('script[type="module"][src*="/assets/"]')?.getAttribute("src") || "";
+  return (s.match(/index-([A-Za-z0-9_-]+)\.js/) || [])[1] || "dev";
+};
+
 function useUpdateWatcher() {
   const [stale, setStale] = useState(false);
   useEffect(() => {
@@ -2744,7 +2751,13 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
       </Card>
 
       <SectionLabel>About</SectionLabel>
-      <Card style={{ padding: "4px 16px" }}><Row label="Version" last><span style={{ fontFamily: MONO, fontSize: 14, color: C.sub }}>1.0.0 · prototype</span></Row></Card>
+      {/* The build id is the hash Vite puts in the bundle filename, so it is the actual
+          running code rather than a number someone remembered to bump. Without it there was
+          no way to answer "did my phone get the update?" — the old hardcoded 1.0.0 never
+          changed, so it looked like nothing ever shipped. */}
+      <Card style={{ padding: "4px 16px" }}>
+        <Row label="Version" sub={`Build ${buildId()}`} last><span style={{ fontFamily: MONO, fontSize: 14, color: C.sub }}>1.0.0 · prototype</span></Row>
+      </Card>
         </>)}
         {editingEquip && <EquipmentManager equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setEditingEquip(false)} />}
         {friendsOpen && <FriendsSheet friendsApi={friendsApi} onClose={() => setFriendsOpen(false)} />}
