@@ -26,6 +26,18 @@ const touchedAt = (k) => { try { return JSON.parse(localStorage.getItem(TOUCH_KE
 const readLocal = (k) => { try { const v = localStorage.getItem(k); return v != null ? JSON.parse(v) : null; } catch { return null; } };
 const writeLocal = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
+/* Order-insensitive comparison.
+   Merging spreads the remote before the local, so an object comes back with its keys in a
+   different order even when nothing about it differs. Comparing raw JSON then reported a
+   change on every single pull, and since a change triggers a reload, signing in put the app
+   into an endless reload loop — which read as sign-in simply not working. */
+const canon = (v) => {
+  if (Array.isArray(v)) return v.map(canon);
+  if (v && typeof v === "object") return Object.keys(v).sort().map((k) => [k, canon(v[k])]);
+  return v;
+};
+export const sameData = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+
 /* ---- merges ----
    Only two keys are genuinely append-shaped, and those are the ones where last-write-wins
    would actually destroy something: a session or a weigh-in recorded on a phone that was
@@ -112,7 +124,7 @@ export async function pull(userId) {
     const localTouched = touchedAt(row.key);
     const remoteNewer = !localTouched || row.updated_at > localTouched;
     const merged = mergeKey(row.key, local, row.value, remoteNewer);
-    if (JSON.stringify(merged) !== JSON.stringify(local)) { writeLocal(row.key, merged); changed++; }
+    if (!sameData(merged, local)) { writeLocal(row.key, merged); changed++; }
   });
   localStorage.setItem(LAST_PULL_KEY, new Date().toISOString());
   return { ok: true, changed };

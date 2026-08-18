@@ -180,7 +180,15 @@ function useSync() {
     if (r.changed) {
       const el = document.activeElement;
       const typing = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-      if (!typing) window.location.reload();
+      // Belt and braces. A reload driven by "the data changed" is only safe while that
+      // signal is trustworthy; one bad merge already turned it into an endless loop that
+      // looked like sign-in being broken. Never reload twice within ten seconds.
+      const last = Number(sessionStorage.getItem("wa_sync_reloaded_at") || 0);
+      const looping = Date.now() - last < 10000;
+      if (!typing && !looping) {
+        sessionStorage.setItem("wa_sync_reloaded_at", String(Date.now()));
+        window.location.reload();
+      }
     }
   }, [user]);
 
