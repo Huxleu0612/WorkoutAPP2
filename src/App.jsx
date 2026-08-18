@@ -32,7 +32,7 @@ import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifi
 import { progressionOf } from "./lib/progression";
 import { calcPlateLoad, DEFAULT_EQUIPMENT } from "./lib/plates";
 import { supabase, syncConfigured } from "./lib/supabase";
-import { syncNow, push as pushSync } from "./lib/sync";
+import { syncNow, push as pushSync, touchKey } from "./lib/sync";
 import * as Friends from "./lib/friends";
 
 /* ===== TOKENS — Nocturne (dark) =====
@@ -67,7 +67,14 @@ const loadLS = (k, fb) => { try { const v = localStorage.getItem(k); return v !=
 const saveLS = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 function usePersist(key, initial) {
   const [s, setS] = useState(() => loadLS(key, initial));
-  useEffect(() => { saveLS(key, s); }, [key, s]);
+  const mounted = useRef(false);
+  useEffect(() => {
+    saveLS(key, s);
+    // The write on mount is just re-persisting what was loaded, not an edit. Stamping it
+    // would make every key look freshly changed and stop sync ever accepting a remote value.
+    if (!mounted.current) { mounted.current = true; return; }
+    touchKey(key);
+  }, [key, s]);
   return [s, setS];
 }
 
@@ -168,8 +175,13 @@ function useSync() {
     if (!r.ok) { setStatus("error"); setError(r.reason); return; }
     setStatus("synced"); setLastSync(new Date().toISOString());
     // The screens read their state from localStorage at mount, so a pull that actually
-    // changed something needs a reload to surface. Silent when nothing came down.
-    if (r.changed) window.location.reload();
+    // changed something needs a reload to surface. Silent when nothing came down — and
+    // never while a field is focused, since reloading mid-sentence would discard the edit.
+    if (r.changed) {
+      const el = document.activeElement;
+      const typing = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+      if (!typing) window.location.reload();
+    }
   }, [user]);
 
   useEffect(() => { if (user) run(); }, [user, run]);
@@ -587,9 +599,18 @@ function Dial({ pct, size = 92, stroke = 9 }) {
 }
 function EditableNumber({ initial, onCommit, suffix, width = 66 }) {
   const [s, setS] = useState(initial);
+  // Latest typed value and commit fn, so unmounting can still save without this effect
+  // re-running (and re-committing) on every keystroke.
+  const latest = useRef(s), commit = useRef(onCommit);
+  latest.current = s; commit.current = onCommit;
   useEffect(() => { setS(initial); }, [initial]);
+  // Committing only on blur silently threw the edit away if you typed a value and then
+  // closed the sheet, which is the natural way to finish. Save on the way out too.
+  useEffect(() => () => { if (latest.current !== initial) commit.current(latest.current); }, [initial]);
   return (<div style={pill}>
-    <input inputMode="decimal" value={s} onChange={(e) => setS(e.target.value)} onBlur={() => onCommit(s)} style={{ border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 15, color: C.ink, textAlign: "right", width }} />
+    <input inputMode="decimal" value={s} onChange={(e) => setS(e.target.value)} onBlur={() => onCommit(s)}
+      onKeyDown={(e) => { if (e.key === "Enter") { onCommit(s); e.currentTarget.blur(); } }}
+      style={{ border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 15, color: C.ink, textAlign: "right", width }} />
     {suffix && <span style={{ fontFamily: MONO, fontSize: 12, color: C.sub }}>{suffix}</span>}<Pencil size={12} color={C.faint} /></div>);
 }
 function DOBPicker({ value, onChange }) {
@@ -1224,8 +1245,9 @@ function useTicker(on) {
 const mmss = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const REST_MS = 90000, REST_SCALE = 120000;
 
-function SessionHeader({ live, label, sub, doneCount, totalSets, onMinimise, menuOpen, setMenuOpen, onDiscard }) {
+function SessionHeader({ live, label, sub, doneCount, totalSets, onMinimise, menuOpen, setMenuOpen, onDiscard, onRestartTimer }) {
   useTicker(true);
+  const [confirmRestart, setConfirmRestart] = useState(false);
   const elapsed = live.startedAt ? Date.now() - new Date(live.startedAt).getTime() : 0;
   const round = { width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, WebkitTapHighlightColor: "transparent" };
   return (
@@ -1235,7 +1257,17 @@ function SessionHeader({ live, label, sub, doneCount, totalSets, onMinimise, men
         <button onClick={onMinimise} style={{ ...round, width: "auto", padding: "0 11px", gap: 5 }} aria-label="Minimise session"><CaretDown size={16} /><span style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 500 }}>Minimise</span></button>
         <div style={{ flex: 1, textAlign: "center", minWidth: 0 }}>
           <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.4, textTransform: "uppercase", color: NEU.n500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
-          <div style={{ fontFamily: SANS, fontSize: 19, fontWeight: 500, color: C.ink, fontVariantNumeric: "tabular-nums", letterSpacing: -0.3 }}>{mmss(elapsed)}</div>
+          {/* Opening a workout to look at it starts the clock, so the clock has to be
+              resettable — otherwise it reads hours long by the time you actually train. */}
+          {confirmRestart ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <button onClick={() => setConfirmRestart(false)} style={{ height: 26, padding: "0 9px", borderRadius: 7, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 11.5, cursor: "pointer" }}>Keep</button>
+              <button onClick={() => { onRestartTimer(); setConfirmRestart(false); }} style={{ height: 26, padding: "0 9px", borderRadius: 7, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 11.5, fontWeight: 500, cursor: "pointer" }}>Restart</button>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmRestart(true)} aria-label={`Session time ${mmss(elapsed)}, tap to restart the timer`}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: SANS, fontSize: 19, fontWeight: 500, color: C.ink, fontVariantNumeric: "tabular-nums", letterSpacing: -0.3, WebkitTapHighlightColor: "transparent" }}>{mmss(elapsed)}</button>
+          )}
         </div>
         <div style={{ position: "relative", flexShrink: 0 }}>
           <button onClick={() => setMenuOpen(!menuOpen)} style={round} aria-label="Session options"><DotsThree size={20} weight="bold" /></button>
@@ -1610,7 +1642,8 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
     <div style={{ padding: "0 17px 96px" }}>
       <SessionHeader live={live} label={wLabel(live.dayIdx)} sub={subLine} doneCount={doneCount} totalSets={totalSets}
         onMinimise={() => setPhase("schedule")} menuOpen={menuOpen} setMenuOpen={setMenuOpen}
-        onDiscard={() => { setMenuOpen(false); setConfirmDiscard(true); }} />
+        onDiscard={() => { setMenuOpen(false); setConfirmDiscard(true); }}
+        onRestartTimer={() => setDraft((d) => ({ ...d, startedAt: new Date().toISOString() }))} />
       {day.ex.map((exx, ei) => {
         const strategy = progressionOf(active, exx);
         const ctx = { lastReadiness: active.lastReadiness, program: active, sessionCount };

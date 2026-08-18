@@ -9,6 +9,19 @@ import { supabase, syncConfigured } from "./supabase";
 // holding. Syncing it would let two phones fight over a live workout.
 export const SYNC_KEYS = ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_maxes", "wa_equipment", "wa_habits", "wa_read", "wa_finance"];
 const LAST_PULL_KEY = "wa_sync_pulled_at";
+const TOUCH_KEY = "wa_touched";
+
+/* When this device last changed each key. Without this, "is the remote newer?" was answered
+   against the time of the last pull, which says nothing about when you last typed — so a
+   stale server row would happily overwrite an edit made seconds ago. */
+export function touchKey(k) {
+  try {
+    const m = JSON.parse(localStorage.getItem(TOUCH_KEY) || "{}");
+    m[k] = new Date().toISOString();
+    localStorage.setItem(TOUCH_KEY, JSON.stringify(m));
+  } catch {}
+}
+const touchedAt = (k) => { try { return JSON.parse(localStorage.getItem(TOUCH_KEY) || "{}")[k] || null; } catch { return null; } };
 
 const readLocal = (k) => { try { const v = localStorage.getItem(k); return v != null ? JSON.parse(v) : null; } catch { return null; } };
 const writeLocal = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
@@ -90,12 +103,14 @@ export async function pull(userId) {
   if (!syncConfigured) return { ok: false, reason: "not-configured" };
   const { data, error } = await supabase.from("app_data").select("key,value,updated_at").eq("user_id", userId);
   if (error) return { ok: false, reason: error.message };
-  const lastPull = localStorage.getItem(LAST_PULL_KEY);
   let changed = 0;
   (data || []).forEach((row) => {
     if (!SYNC_KEYS.includes(row.key)) return;
     const local = readLocal(row.key);
-    const remoteNewer = !lastPull || row.updated_at > lastPull;
+    // Compare the server's write against this device's last edit of the same key, not
+    // against when we last pulled. An edit made a moment ago must beat an older server row.
+    const localTouched = touchedAt(row.key);
+    const remoteNewer = !localTouched || row.updated_at > localTouched;
     const merged = mergeKey(row.key, local, row.value, remoteNewer);
     if (JSON.stringify(merged) !== JSON.stringify(local)) { writeLocal(row.key, merged); changed++; }
   });
