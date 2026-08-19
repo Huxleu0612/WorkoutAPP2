@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Four pillars — Train, Read, Habits, Finance — in the same 2x2 the habit heat grid uses.
+       One square lit brightest, so it reads as a day partly done rather than a static logo.
+       Sized to 59% of the canvas so it survives Android's maskable safe zone uncropped. -->
+  <rect width="512" height="512" fill="#161826"/>
+  <rect x="104" y="104" width="144" height="144" rx="24" fill="#423A6A"/>
+  <rect x="264" y="104" width="144" height="144" rx="24" fill="#5D5294"/>
+  <rect x="104" y="264" width="144" height="144" rx="24" fill="#5D5294"/>
+  <rect x="264" y="264" width="144" height="144" rx="24" fill="#B5ABFC"/>
+</svg>
