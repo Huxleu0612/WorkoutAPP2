@@ -1,6 +1,6 @@
 {
-  "name": "Workout",
-  "short_name": "Workout",
+  "name": "Compound",
+  "short_name": "Compound",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

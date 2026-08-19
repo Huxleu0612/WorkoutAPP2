@@ -130,10 +130,10 @@ function useAutoSnapshot() {
   }, []);
 }
 function exportBackup() {
-  const body = JSON.stringify({ app: "WorkoutAPP2", version: VER, exportedAt: new Date().toISOString(), data: collectData() }, null, 2);
+  const body = JSON.stringify({ app: "Compound", version: VER, exportedAt: new Date().toISOString(), data: collectData() }, null, 2);
   const url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
   const a = document.createElement("a");
-  a.href = url; a.download = `workout-backup-${ymd(new Date())}.json`;
+  a.href = url; a.download = `compound-backup-${ymd(new Date())}.json`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
