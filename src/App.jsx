@@ -1220,7 +1220,14 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
                 <div style={{ width: "100%", height: 34, borderRadius: 4, background: NEU.n900, display: "flex", alignItems: "flex-end", overflow: "hidden", outline: s.isToday ? `1px solid ${AC.a300}` : sel ? `1px solid ${NEU.n700}` : "none", outlineOffset: 1 }}>
                   <div style={{ width: "100%", height: `${s.pct}%`, background: fill, borderRadius: 4 }} />
                 </div>
-                <Dumbbell size={12} weight={s.wDone ? "fill" : "regular"} color={s.wDone ? AC.a300 : s.scheduled ? (s.missed ? C.amber : NEU.n400) : NEU.n900} />
+                {/* The bar above is habits. The workout is this icon, and it is now plainly
+                    green or red rather than a shade of accent you had to decode: green once
+                    trained, red while a scheduled session is still outstanding, and dim on a
+                    rest day when nothing is owed. Today stays neutral until the day is over,
+                    since a session you have not done yet at 9am is not a failure. */}
+                <Dumbbell size={12}
+                  weight={s.wDone ? "fill" : "regular"}
+                  color={!s.scheduled ? NEU.n900 : s.wDone ? C.green : s.isToday ? NEU.n400 : C.red} />
               </button>
             );
           })}
@@ -1390,7 +1397,7 @@ function useTicker(on) {
 const mmss = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const REST_MS = 90000, REST_SCALE = 120000;
 
-function SessionHeader({ live, label, sub, doneCount, totalSets, onMinimise, menuOpen, setMenuOpen, onDiscard, onRestartTimer }) {
+function SessionHeader({ live, label, sub, doneCount, totalSets, onMinimise, menuOpen, setMenuOpen, onDiscard, onRestartTimer, onStartClock }) {
   useTicker(true);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const elapsed = live.startedAt ? Date.now() - new Date(live.startedAt).getTime() : 0;
@@ -1402,9 +1409,12 @@ function SessionHeader({ live, label, sub, doneCount, totalSets, onMinimise, men
         <button onClick={onMinimise} style={{ ...round, width: "auto", padding: "0 11px", gap: 5 }} aria-label="Minimise session"><CaretDown size={16} /><span style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 500 }}>Minimise</span></button>
         <div style={{ flex: 1, textAlign: "center", minWidth: 0 }}>
           <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.4, textTransform: "uppercase", color: NEU.n500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
-          {/* Opening a workout to look at it starts the clock, so the clock has to be
-              resettable — otherwise it reads hours long by the time you actually train. */}
-          {confirmRestart ? (
+          {/* Not started yet: you are looking at the session, not doing it. Nothing is
+              counting, and the clock only begins when you say so or log your first set. */}
+          {!live.startedAt ? (
+            <button onClick={onStartClock} aria-label="Start the session timer"
+              style={{ height: 26, marginTop: 2, padding: "0 12px", borderRadius: 7, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 12.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Start timer</button>
+          ) : confirmRestart ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <button onClick={() => setConfirmRestart(false)} style={{ height: 26, padding: "0 9px", borderRadius: 7, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 11.5, cursor: "pointer" }}>Keep</button>
               <button onClick={() => { onRestartTimer(); setConfirmRestart(false); }} style={{ height: 26, padding: "0 9px", borderRadius: 7, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 11.5, fontWeight: 500, cursor: "pointer" }}>Restart</button>
@@ -1513,12 +1523,23 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
         Array.from({ length: setCount(exx) }).forEach((_, si) => { init[`${ei}-${si}`] = { w: exx.last?.logged && exx.last.w > 0 ? wStr(rec.w, u) : "", reps: exx.last?.logged ? String(exx.last.reps || 10) : "" }; });
       }
     });
-    setDraft({ programId: active.id, dayIdx: idx, dateKey: ymd(new Date()), setData: init, done: {}, startedAt: new Date().toISOString() });
+    // startedAt stays null so opening a workout to see what is in it does not start the
+    // clock. Looking at Wednesday's session on Monday should cost nothing. The clock starts
+    // on the first logged set, or when you tap start.
+    setDraft({ programId: active.id, dayIdx: idx, dateKey: ymd(new Date()), setData: init, done: {}, startedAt: null });
     setOpenRating(null); setConfirmDiscard(false); setPhase("active");
   };
   const upd = (key, field, val) => setDraft((d) => ({ ...d, setData: { ...d.setData, [key]: { ...(d.setData[key] || {}), [field]: val } } }));
   // logging a set is also what starts the rest clock — there is no separate action for it
-  const rate = (key, c) => { setDraft((d) => ({ ...d, done: { ...d.done, [key]: c } })); setRestUntil(Date.now() + REST_MS); };
+  // Logging a set is also what starts the rest clock — there is no separate action for it —
+  // and it starts the session clock too if you never explicitly tapped start.
+  const rate = (key, c) => {
+    setDraft((d) => ({ ...d, done: { ...d.done, [key]: c }, startedAt: d.startedAt || new Date().toISOString() }));
+    setRestUntil(Date.now() + REST_MS);
+  };
+  // Tapping a logged set again clears it. Mis-taps happen mid-set and there was no way back.
+  const unrate = (key) => setDraft((d) => { const done = { ...d.done }; delete done[key]; return { ...d, done }; });
+  const startClock = () => setDraft((d) => ({ ...d, startedAt: new Date().toISOString() }));
   const discard = () => { setDraft(null); setConfirmDiscard(false); setRestUntil(null); setPhase("schedule"); };
 
   const finish = (readiness) => {
@@ -1788,7 +1809,8 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
       <SessionHeader live={live} label={wLabel(live.dayIdx)} sub={subLine} doneCount={doneCount} totalSets={totalSets}
         onMinimise={() => setPhase("schedule")} menuOpen={menuOpen} setMenuOpen={setMenuOpen}
         onDiscard={() => { setMenuOpen(false); setConfirmDiscard(true); }}
-        onRestartTimer={() => setDraft((d) => ({ ...d, startedAt: new Date().toISOString() }))} />
+        onRestartTimer={() => setDraft((d) => ({ ...d, startedAt: new Date().toISOString() }))}
+        onStartClock={startClock} />
       {day.ex.map((exx, ei) => {
         const strategy = progressionOf(active, exx);
         const ctx = { lastReadiness: active.lastReadiness, program: active, sessionCount };
@@ -1858,7 +1880,14 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
                     <div style={{ flex: 1, textAlign: "center", fontFamily: MONO, fontSize: 12, color: C.faint }}>{target}</div>
                     <div style={cell}><input inputMode="decimal" placeholder={bw ? "BW" : "—"} value={sd.w || ""} onChange={(e) => upd(key, "w", e.target.value)} style={inp} /></div>
                     <div style={cell}><input inputMode="numeric" placeholder={spec ? String(spec.reps) : "—"} value={sd.reps || ""} onChange={(e) => upd(key, "reps", e.target.value)} style={inp} /></div>
-                    <button onClick={() => (strategy.setRatingKind === "log" ? rate(key, "logged") : setOpenRating(openRating === key ? null : key))} style={{ width: 48, height: 44, borderRadius: 10, cursor: "pointer", border: rated ? "none" : `1.5px solid ${C.line}`, background: rated ? (ratings[rated]?.c || ACC) : C.card, display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }}><Check size={18} color={rated ? C.page : C.faint} strokeWidth={rated ? 3 : 2.4} /></button>
+                    <button
+                      aria-label={rated ? "Logged — tap to undo" : "Log this set"}
+                      onClick={() => {
+                        if (rated) { unrate(key); setOpenRating(null); return; } // tap a logged set to undo it
+                        if (strategy.setRatingKind === "log") rate(key, "logged");
+                        else setOpenRating(openRating === key ? null : key);
+                      }}
+                      style={{ width: 48, height: 44, borderRadius: 10, cursor: "pointer", border: rated ? "none" : `1.5px solid ${C.line}`, background: rated ? (ratings[rated]?.c || ACC) : C.card, display: "flex", alignItems: "center", justifyContent: "center", WebkitTapHighlightColor: "transparent" }}><Check size={18} color={rated ? C.page : C.faint} strokeWidth={rated ? 3 : 2.4} /></button>
                   </div>
                   {openRating === key && (
                     <div style={{ padding: "4px 0 10px" }}><div style={{ fontFamily: MONO, fontSize: 10, color: C.faint, letterSpacing: 1, marginBottom: 8 }}>{strategy.setRatingKind === "hitmiss" ? "DID YOU HIT THE TARGET REPS?" : "HOW HARD WAS THAT SET?"}</div>
