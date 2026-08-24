@@ -2,6 +2,10 @@
    the UI converts for display via wStr/fmtW, same pattern as profile.goalKg etc. */
 export const DEFAULT_EQUIPMENT = {
   barKg: 20,
+  // Pulley ratio on your cable machine. On 2:1 the stack moves half as far as the handle, so
+  // you feel half of what the pin says — 100 on the stack is 50 in your hand. The app logs
+  // real resistance, so this only exists to tell you where to put the pin.
+  cableRatio: 1,
   plates: [
     { kg: 25, pairsOwned: 2 },
     { kg: 20, pairsOwned: 2 },
@@ -12,6 +16,9 @@ export const DEFAULT_EQUIPMENT = {
     { kg: 1.25, pairsOwned: 1 },
   ],
 };
+
+// What to select on the stack to actually lift `targetKg` at the handle.
+export const cablePinKg = (targetKg, ratio = 1) => Math.round(targetKg * (ratio || 1) * 100) / 100;
 
 export function calcPlateLoad(targetKg, barKg, plates) {
   const perSide = Math.max(0, (targetKg - barKg) / 2);

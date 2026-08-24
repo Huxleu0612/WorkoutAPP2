@@ -30,7 +30,7 @@ import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } 
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { progressionOf } from "./lib/progression";
-import { calcPlateLoad, DEFAULT_EQUIPMENT } from "./lib/plates";
+import { calcPlateLoad, cablePinKg, DEFAULT_EQUIPMENT } from "./lib/plates";
 import { supabase, syncConfigured } from "./lib/supabase";
 import { syncNow, push as pushSync, touchKey } from "./lib/sync";
 import * as Friends from "./lib/friends";
@@ -353,6 +353,7 @@ const cap = (s) => (s || "").replace(/\b\w/g, (c) => c.toUpperCase());
 const exName = (id) => EXERCISE_MAP.get(id)?.name || id;
 const exMuscle = (id) => EXERCISE_MAP.get(id)?.bodyPart || "";
 const isBW = (id) => EXERCISE_MAP.get(id)?.equipment === "body weight";
+const isCable = (id) => EXERCISE_MAP.get(id)?.equipment === "cable";
 const exFull = (id) => EXERCISE_MAP.get(id);
 const setCount = (exx) => (typeof exx.sets === "number" ? exx.sets : exx.sets.length);
 const dayIdCache = new WeakMap();
@@ -1861,6 +1862,18 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
               <span style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, flex: 1, lineHeight: 1.35 }}><b style={{ color: dirColor }}>{rec.action}.</b> {rec.first ? "Set your baseline — no target yet." : rec.note}</span>
               {!rec.first && <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 600, color: C.ink, whiteSpace: "nowrap" }}>{rec.w === 0 ? "BW" : `${wStr(rec.w, u)} ${u}`}</span>}
             </div>
+            {/* On a 2:1 machine the stack moves half as far as the handle, so the pin reads
+                double what you are actually lifting. The log stores real resistance — this
+                just saves doing the arithmetic mid-set, and stops a 2:1 stack silently
+                inflating history by a factor of two. */}
+            {isCable(exx.id) && (equipment?.cableRatio || 1) !== 1 && rec.w > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, background: AC.a900, border: `1px solid ${AC.a800}`, borderRadius: 10, padding: "8px 12px", marginBottom: 12 }}>
+                <Calculator size={14} color={AC.a300} />
+                <span style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, lineHeight: 1.35 }}>
+                  Set the pin to <b style={{ color: AC.a300, fontFamily: MONO }}>{wStr(cablePinKg(rec.w, equipment.cableRatio), u)} {u}</b> — your {equipment.cableRatio}:1 cable gives {wStr(rec.w, u)} {u} at the handle.
+                </span>
+              </div>
+            )}
             {/* Only where a set is actually open-ended. The point of an AMRAP here is a few
                 honest extra reps, not a rep-out — pushing to true failure costs more in
                 fatigue than it returns, so the guidance says so rather than leaving it to
@@ -2418,7 +2431,13 @@ function EquipmentManager({ equipment, setEquipment, unit, onClose }) {
         </div>
         <div style={{ fontFamily: SANS, fontSize: 13, color: C.sub, margin: "6px 0 4px", lineHeight: 1.45 }}>What you actually own — the plate calculator only suggests plates you have.</div>
         <Card style={{ padding: "4px 16px", margin: "12px 0" }}>
-          <Row label="Barbell weight" last><EditableNumber key={`bar${u}`} initial={wStr(equipment.barKg, u)} onCommit={setBar} suffix={u} /></Row>
+          <Row label="Barbell weight"><EditableNumber key={`bar${u}`} initial={wStr(equipment.barKg, u)} onCommit={setBar} suffix={u} /></Row>
+          <Row label="Cable ratio" sub={(equipment.cableRatio || 1) === 1 ? "The pin matches what you lift" : "The pin reads double what you lift"} last>
+            <div style={{ width: 132 }}>
+              <Segmented small options={[{ v: 1, l: "1:1" }, { v: 2, l: "2:1" }]} value={equipment.cableRatio || 1}
+                onChange={(v) => setEquipment((e) => ({ ...e, cableRatio: v }))} />
+            </div>
+          </Row>
         </Card>
         <SectionLabel>Plates you own <span style={{ textTransform: "none", letterSpacing: 0, color: C.faint }}>· per side</span></SectionLabel>
         <Card style={{ padding: "4px 16px", marginBottom: 12 }}>
