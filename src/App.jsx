@@ -1861,9 +1861,18 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
               <span style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, flex: 1, lineHeight: 1.35 }}><b style={{ color: dirColor }}>{rec.action}.</b> {rec.first ? "Set your baseline — no target yet." : rec.note}</span>
               {!rec.first && <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 600, color: C.ink, whiteSpace: "nowrap" }}>{rec.w === 0 ? "BW" : `${wStr(rec.w, u)} ${u}`}</span>}
             </div>
+            {/* Only where a set is actually open-ended. The point of an AMRAP here is a few
+                honest extra reps, not a rep-out — pushing to true failure costs more in
+                fatigue than it returns, so the guidance says so rather than leaving it to
+                be inferred from a number sitting on screen. */}
+            {(specs || []).some((s) => s?.kind === "amrap") && (
+              <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, lineHeight: 1.45, margin: "-4px 2px 11px" }}>
+                On the AMRAP set, stop with 1–2 reps still in the tank{exx.last?.logged ? ` — last time you got ${exx.last.reps}` : ""}.
+              </div>
+            )}
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 7px" }}>
               <div style={{ width: 26, fontFamily: MONO, fontSize: 10, letterSpacing: .8, color: C.faint, textAlign: "left" }}>SET</div>
-              <div style={th}>{specs ? "TARGET" : "PREV"}</div>
+              <div style={th}>{specs ? "TARGET · LAST" : "PREV"}</div>
               <div style={th}>{bw ? "+" + u.toUpperCase() : u.toUpperCase()}</div>
               <div style={th}>REPS</div>
               <div style={{ width: 48 }} />
@@ -1872,7 +1881,15 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
               const key = `${ei}-${si}`, rated = done[key]; const sd = setData[key] || { w: "", reps: "" };
               const cell = { flex: 1, height: 44, background: C.page, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center" };
               const inp = { border: "none", outline: "none", background: "transparent", fontFamily: MONO, fontSize: 16, fontWeight: 600, color: C.ink, textAlign: "center", width: "100%", height: "100%", minWidth: 0 };
-              const target = spec ? (spec.kind === "amrap" ? <span style={{ color: ACC, fontWeight: 700 }}>AMRAP</span> : `${spec.reps} reps`) : prev;
+              // On an AMRAP, last session's reps are the useful thing to see — the target
+              // column would otherwise just read "AMRAP", which tells you nothing. Shown as
+              // context, deliberately not framed as a number to beat.
+              const lastAmrap = exx.last?.logged ? exx.last.reps : null;
+              const target = spec
+                ? (spec.kind === "amrap"
+                    ? <span style={{ color: ACC, fontWeight: 700 }}>AMRAP{lastAmrap ? <span style={{ color: NEU.n600, fontWeight: 400 }}> · {lastAmrap}</span> : null}</span>
+                    : `${spec.reps} reps`)
+                : prev;
               return (
                 <div key={si}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0" }}>
