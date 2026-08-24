@@ -354,6 +354,26 @@ const exName = (id) => EXERCISE_MAP.get(id)?.name || id;
 const exMuscle = (id) => EXERCISE_MAP.get(id)?.bodyPart || "";
 const isBW = (id) => EXERCISE_MAP.get(id)?.equipment === "body weight";
 const isCable = (id) => EXERCISE_MAP.get(id)?.equipment === "cable";
+// Always shown on cable work, on 1:1 as well as 2:1 — the point is knowing which assumption
+// the numbers were built on, and "no badge" is indistinguishable from "nobody thought about it".
+const CableRatioBadge = ({ ratio }) => (
+  <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 600, letterSpacing: .4, color: (ratio || 1) === 1 ? NEU.n600 : AC.a300, background: (ratio || 1) === 1 ? NEU.n900 : AC.a900, border: `1px solid ${(ratio || 1) === 1 ? "transparent" : AC.a800}`, borderRadius: 5, padding: "2px 6px", flexShrink: 0, whiteSpace: "nowrap" }}>
+    {(ratio || 1)}:1
+  </span>
+);
+// Two numbers people confuse constantly: what goes on the pin, and what belongs in the log.
+const CableGuide = ({ kg, ratio, u }) => {
+  const r = ratio || 1;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, background: r === 1 ? C.page : AC.a900, border: `1px solid ${r === 1 ? C.line : AC.a800}`, borderRadius: 10, padding: "8px 11px", marginBottom: 12 }}>
+      <CableRatioBadge ratio={r} />
+      <span style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, lineHeight: 1.4 }}>
+        Pin <b style={{ fontFamily: MONO, color: r === 1 ? C.ink : AC.a300 }}>{wStr(cablePinKg(kg, r), u)}</b> · log <b style={{ fontFamily: MONO, color: C.ink }}>{wStr(kg, u)}</b> {u}
+        {r !== 1 && <span style={{ color: NEU.n600 }}> — the stack reads double</span>}
+      </span>
+    </div>
+  );
+};
 const exFull = (id) => EXERCISE_MAP.get(id);
 const setCount = (exx) => (typeof exx.sets === "number" ? exx.sets : exx.sets.length);
 const dayIdCache = new WeakMap();
@@ -1710,7 +1730,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
           </div>
           <ChevronRight size={16} color={C.faint} />
         </button>
-        {calcOpen && <PlateCalculator targetKg={calcOpen.initialKg} equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setCalcOpen(null)} />}
+        {calcOpen && <PlateCalculator targetKg={calcOpen.initialKg} cable={calcOpen.cable} equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setCalcOpen(null)} />}
       </div>
     );
   }
@@ -1854,7 +1874,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
             <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 12 }}>
               <ExerciseThumb exercise={exFull(exx.id)} onOpen={setDetail} />
               <div onClick={() => setDetail(exFull(exx.id))} style={{ flex: 1, cursor: "pointer", minWidth: 0 }}><div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 500, color: C.ink }}>{exName(exx.id)}</div><div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 2 }}>Set {Math.min(ratedCount + 1, rows.length)} of {rows.length} · {exMuscle(exx.id).toLowerCase()}</div></div>
-              {!bw && <button onClick={() => setCalcOpen({ initialKg: tm || rec.w || 0 })} style={{ ...miniRound, width: 34, height: 34 }}><Calculator size={15} /></button>}
+              {!bw && <button onClick={() => setCalcOpen({ initialKg: tm || rec.w || 0, cable: isCable(exx.id) })} style={{ ...miniRound, width: 34, height: 34 }}><Calculator size={15} /></button>}
               {ei !== currentIdx && <button onClick={() => setExpandedEx(null)} style={{ ...miniRound, width: 34, height: 34 }} aria-label="Collapse"><CaretUp size={15} /></button>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.page, borderRadius: 10, padding: "9px 12px", marginBottom: 12 }}>
@@ -1862,18 +1882,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
               <span style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, flex: 1, lineHeight: 1.35 }}><b style={{ color: dirColor }}>{rec.action}.</b> {rec.first ? "Set your baseline — no target yet." : rec.note}</span>
               {!rec.first && <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 600, color: C.ink, whiteSpace: "nowrap" }}>{rec.w === 0 ? "BW" : `${wStr(rec.w, u)} ${u}`}</span>}
             </div>
-            {/* On a 2:1 machine the stack moves half as far as the handle, so the pin reads
-                double what you are actually lifting. The log stores real resistance — this
-                just saves doing the arithmetic mid-set, and stops a 2:1 stack silently
-                inflating history by a factor of two. */}
-            {isCable(exx.id) && (equipment?.cableRatio || 1) !== 1 && rec.w > 0 && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, background: AC.a900, border: `1px solid ${AC.a800}`, borderRadius: 10, padding: "8px 12px", marginBottom: 12 }}>
-                <Calculator size={14} color={AC.a300} />
-                <span style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, lineHeight: 1.35 }}>
-                  Set the pin to <b style={{ color: AC.a300, fontFamily: MONO }}>{wStr(cablePinKg(rec.w, equipment.cableRatio), u)} {u}</b> — your {equipment.cableRatio}:1 cable gives {wStr(rec.w, u)} {u} at the handle.
-                </span>
-              </div>
-            )}
+            {isCable(exx.id) && rec.w > 0 && <CableGuide kg={rec.w} ratio={equipment?.cableRatio} u={u} />}
             {/* Only where a set is actually open-ended. The point of an AMRAP here is a few
                 honest extra reps, not a rep-out — pushing to true failure costs more in
                 fatigue than it returns, so the guidance says so rather than leaving it to
@@ -1935,7 +1944,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
       {confirmDiscard && <><div style={{ height: 12 }} /><ConfirmPanel title="Discard this workout?" body="Everything you've logged in this session will be deleted. Your previous sessions are unaffected." slideLabel="Slide to discard" onConfirm={discard} onCancel={() => setConfirmDiscard(false)} /></>}
       {restUntil && <RestFooter until={restUntil} onExtend={(ms) => setRestUntil((t) => Math.max(Date.now() + 1000, t + ms))} onSkip={() => setRestUntil(null)} />}
       {detail && <ExerciseDetail exercise={detail} onClose={() => setDetail(null)} />}
-      {calcOpen && <PlateCalculator targetKg={calcOpen.initialKg} equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setCalcOpen(null)} />}
+      {calcOpen && <PlateCalculator targetKg={calcOpen.initialKg} cable={calcOpen.cable} equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setCalcOpen(null)} />}
     </div>
   );
 }
@@ -2462,19 +2471,22 @@ function EquipmentManager({ equipment, setEquipment, unit, onClose }) {
   );
 }
 
-function PlateCalculator({ targetKg: initialKg, equipment, setEquipment, unit, onClose }) {
+function PlateCalculator({ targetKg: initialKg, cable, equipment, setEquipment, unit, onClose }) {
   const u = unit;
   const [targetStr, setTargetStr] = useState(initialKg > 0 ? wStr(initialKg, u) : "");
   const [editingEquip, setEditingEquip] = useState(false);
   const n = parseFloat(targetStr);
   const targetKg = n > 0 ? (u === "lb" ? n / KG_TO_LB : n) : 0;
-  const result = calcPlateLoad(targetKg, equipment.barKg, equipment.plates);
+  const ratio = equipment.cableRatio || 1;
+  // A cable stack has no plates to load, so the plate maths is meaningless here. What you
+  // actually need is the pin number and the number to log, which are different on 2:1.
+  const result = cable ? null : calcPlateLoad(targetKg, equipment.barKg, equipment.plates);
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: C.scrim, zIndex: 61, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "20px 20px 0 0", padding: "18px 20px 34px", maxHeight: "86vh", overflowY: "auto" }}>
         <div style={{ width: 38, height: 4, borderRadius: 2, background: C.line, margin: "0 auto 16px" }} />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h2 style={{ fontFamily: SANS, fontSize: 20, fontWeight: 700, color: C.ink, margin: 0 }}>Plate calculator</h2>
+          <h2 style={{ fontFamily: SANS, fontSize: 20, fontWeight: 700, color: C.ink, margin: 0 }}>{cable ? "Cable weight" : "Plate calculator"}</h2>
           <button onClick={onClose} style={miniRound}><X size={18} /></button>
         </div>
         <div style={{ margin: "16px 0" }}>
@@ -2484,7 +2496,24 @@ function PlateCalculator({ targetKg: initialKg, equipment, setEquipment, unit, o
             <span style={{ fontFamily: MONO, fontSize: 14, color: C.sub }}>{u}</span>
           </div>
         </div>
-        {targetKg > 0 && (
+        {targetKg > 0 && cable ? (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              {[{ k: "Put on the pin", v: cablePinKg(targetKg, ratio), hi: true }, { k: "Log in the app", v: targetKg, hi: false }].map((c) => (
+                <div key={c.k} style={{ flex: 1, background: c.hi && ratio !== 1 ? AC.a900 : C.page, border: `1px solid ${c.hi && ratio !== 1 ? AC.a800 : C.line}`, borderRadius: 12, padding: "13px 14px" }}>
+                  <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.1, textTransform: "uppercase", color: NEU.n600, whiteSpace: "nowrap" }}>{c.k}</div>
+                  <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 600, color: c.hi && ratio !== 1 ? AC.a300 : C.ink, marginTop: 5 }}>{wStr(c.v, u)}<span style={{ fontSize: 13, color: C.sub }}> {u}</span></div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 11 }}>
+              <CableRatioBadge ratio={ratio} />
+              <span style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, lineHeight: 1.45 }}>
+                {ratio === 1 ? "Your cable is direct drive, so the pin and the log are the same." : "Your 2:1 cable halves the stack, so the pin reads double what you lift. Always log the smaller number."}
+              </span>
+            </div>
+          </div>
+        ) : targetKg > 0 && (
           result.belowBar ? (
             <div style={{ padding: "12px 14px", background: C.amberBg, borderRadius: 11, fontFamily: SANS, fontSize: 13, color: C.ink, marginBottom: 14 }}>Target is lighter than the bar itself ({wStr(equipment.barKg, u)}{u}) — no plates needed.</div>
           ) : (
