@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from "recharts";
+import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from "recharts";
 // Phosphor is the design system's icon set. Aliased to the previous lucide names so the
 // ~235 call sites stay untouched; Phosphor has no strokeWidth prop, so the strokeWidth
 // props scattered through those call sites are inert and get cleaned up per screen.
@@ -398,6 +398,21 @@ const effWeeks = (p) => effMs(p) / (7 * DAYMS);
 const programWeek = (p) => Math.min(p?.weeks || 12, Math.floor(effWeeks(p)) + 1);
 const durStr = (p) => { const d = Math.floor(effMs(p) / DAYMS); const w = Math.floor(d / 7), rd = d % 7; if (d < 7) return `${d} day${d !== 1 ? "s" : ""}`; return `${w} week${w !== 1 ? "s" : ""}${rd ? ` ${rd}d` : ""}`; };
 const sessionsFor = (h, pid) => h.filter((x) => x.programId === pid);
+// The last time you actually did this exercise, set by set, newest session wins. exx.last
+// only ever kept a one-set summary, so the session table's LAST column had nothing to print
+// for anything but an AMRAP — it advertised "TARGET · LAST" and then showed the target
+// twice. The real per-set record is in history, so read it from there. history is appended
+// in order, hence the backwards walk. Today's own draft is skipped: what you are lifting
+// right now is not what you lifted last time.
+const lastSetsFor = (history, exId, exceptDate) => {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i];
+    if (exceptDate && h.date === exceptDate) continue;
+    const mine = (h.sets || []).filter((x) => x.exId === exId);
+    if (mine.length) return { date: h.date, sets: mine };
+  }
+  return null;
+};
 // one source of truth for "how much work is in these sessions" — shared by StatsView and Train
 const volumeAndSets = (sessions) => {
   const allSets = sessions.flatMap((s) => s.sets || []);
@@ -416,13 +431,21 @@ const weekStreak = (sessions) => {
   while (weeks.has(ymd(cursor))) { n++; cursor = addDays(cursor, -7); }
   return n;
 };
+// Weekly training volume, oldest first. Two things here exist because of how the chart used
+// to read. Weeks from before you had ever trained came back as zero and drew a long flat run
+// that looked like a plateau you had climbed out of; and the week you are standing in is only
+// part finished, so it always came last and lowest, which looked like a decline. The leading
+// empties are dropped, and the live week is flagged so the chart can label it rather than
+// quietly mixing half a week in among whole ones.
 const weeklyVolume = (sessions, weeks = 8) => {
   const thisMon = mondayOf(new Date());
-  return Array.from({ length: weeks }).map((_, i) => {
+  const all = Array.from({ length: weeks }).map((_, i) => {
     const m = addDays(thisMon, -(weeks - 1 - i) * 7), nx = addDays(m, 7);
     const inWeek = sessions.filter((s) => { const d = startOfDay(new Date(s.date)); return d >= m && d < nx; });
-    return { label: `${m.getDate()} ${MON[m.getMonth()]}`, kg: volumeAndSets(inWeek).volumeKg };
+    return { label: `${m.getDate()} ${MON[m.getMonth()]}`, kg: volumeAndSets(inWeek).volumeKg, current: i === weeks - 1 };
   });
+  const from = all.findIndex((w) => w.kg > 0);
+  return from === -1 ? [] : all.slice(from);
 };
 const kFmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
 
@@ -665,12 +688,6 @@ const Row = ({ label, sub, children, last }) => (
   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 0", borderBottom: last ? "none" : `1px solid ${C.lineSoft}`, minHeight: 30, gap: 12 }}>
     <div><div style={{ fontFamily: SANS, fontSize: 15, color: C.ink, fontWeight: 500 }}>{label}</div>{sub && <div style={{ fontFamily: SANS, fontSize: 12, color: C.sub, marginTop: 2 }}>{sub}</div>}</div><div>{children}</div></div>
 );
-function Dial({ pct, size = 92, stroke = 9 }) {
-  const r = (size - stroke) / 2, c = 2 * Math.PI * r, off = c * (1 - pct / 100);
-  return (<div style={{ position: "relative", width: size, height: size }}>
-    <svg width={size} height={size}><circle cx={size / 2} cy={size / 2} r={r} stroke={C.onDarkLine} strokeWidth={stroke} fill="none" /><circle cx={size / 2} cy={size / 2} r={r} stroke={ACC} strokeWidth={stroke} fill="none" strokeDasharray={c} strokeDashoffset={off} strokeLinecap="round" transform={`rotate(-90 ${size / 2} ${size / 2})`} /></svg>
-    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}><span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 600, color: C.onDark, lineHeight: 1 }}>{pct}</span><span style={{ fontFamily: MONO, fontSize: 10, color: C.onDarkSub }}>%</span></div></div>);
-}
 function EditableNumber({ initial, onCommit, suffix, width = 66 }) {
   const [s, setS] = useState(initial);
   // Latest typed value and commit fn, so unmounting can still save without this effect
@@ -1255,6 +1272,38 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
         </div>
       </Card>
 
+      {/* OPEN ITEMS — habit chips tick in place, no trip to the Habits tab */}
+      {(habitsToday.length > 0 || readLeft > 0) && (
+        <Card style={{ padding: 16, marginBottom: 16 }}>
+          <button onClick={() => go("read")} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", marginBottom: habitsToday.length ? 12 : 0, paddingBottom: habitsToday.length ? 12 : 0, borderBottom: habitsToday.length ? `1px solid ${C.lineSoft}` : "none", WebkitTapHighlightColor: "transparent" }}>
+            <BookOpen size={17} color={readLeft > 0 ? ACC : C.green} />
+            <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>{readLeft > 0 ? `${readLeft} min of reading left` : "Reading done today"}</span>
+          </button>
+          {habitsToday.length > 0 && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 11 }}>
+            <button onClick={() => go("habits")} style={{ display: "flex", alignItems: "center", gap: 9, flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+              <Target size={17} color={openHabits.length ? ACC : C.green} />
+              <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>{openHabits.length ? `${openHabits.length} habit${openHabits.length === 1 ? "" : "s"} left` : "All habits marked"}</span>
+            </button>
+            <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, flexShrink: 0 }}>Tap to change</span>
+          </div>}
+          {/* Every habit stays listed, not just the unmarked ones, so a chip can be cycled
+              back and forth here instead of disappearing on the first tap. */}
+          {habitsToday.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {habitsToday.map((h) => {
+                const st = habitState(h, todayKey), col = habitStateColor(st);
+                return (
+                  <button key={h.id} onClick={() => cycleHabit(h.id)} aria-label={`${h.name} — ${habitStateLabel(st) || "not marked"}, tap to change`}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 11px", borderRadius: 99, border: st ? `1px solid ${col}` : "none", background: NEU.n900, color: st ? col : C.ink, fontFamily: SANS, fontSize: 11.5, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                    {st ? <CheckCircle size={13} weight="fill" color={col} /> : <Circle size={13} color={NEU.n600} />} {h.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      )}
+
       {/* TODAY'S WORKOUT */}
       {(() => {
         if (selSession) {
@@ -1314,61 +1363,36 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
         );
       })()}
 
-      {/* OPEN ITEMS — habit chips tick in place, no trip to the Habits tab */}
-      {(habitsToday.length > 0 || readLeft > 0) && (
-        <Card style={{ padding: 16, marginBottom: 16 }}>
-          <button onClick={() => go("read")} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", marginBottom: habitsToday.length ? 12 : 0, paddingBottom: habitsToday.length ? 12 : 0, borderBottom: habitsToday.length ? `1px solid ${C.lineSoft}` : "none", WebkitTapHighlightColor: "transparent" }}>
-            <BookOpen size={17} color={readLeft > 0 ? ACC : C.green} />
-            <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>{readLeft > 0 ? `${readLeft} min of reading left` : "Reading done today"}</span>
-          </button>
-          {habitsToday.length > 0 && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 11 }}>
-            <button onClick={() => go("habits")} style={{ display: "flex", alignItems: "center", gap: 9, flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
-              <Target size={17} color={openHabits.length ? ACC : C.green} />
-              <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>{openHabits.length ? `${openHabits.length} habit${openHabits.length === 1 ? "" : "s"} left` : "All habits marked"}</span>
-            </button>
-            <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, flexShrink: 0 }}>Tap to change</span>
-          </div>}
-          {/* Every habit stays listed, not just the unmarked ones, so a chip can be cycled
-              back and forth here instead of disappearing on the first tap. */}
-          {habitsToday.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {habitsToday.map((h) => {
-                const st = habitState(h, todayKey), col = habitStateColor(st);
-                return (
-                  <button key={h.id} onClick={() => cycleHabit(h.id)} aria-label={`${h.name} — ${habitStateLabel(st) || "not marked"}, tap to change`}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 11px", borderRadius: 99, border: st ? `1px solid ${col}` : "none", background: NEU.n900, color: st ? col : C.ink, fontFamily: SANS, fontSize: 11.5, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
-                    {st ? <CheckCircle size={13} weight="fill" color={col} /> : <Circle size={13} color={NEU.n600} />} {h.name}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </Card>
-      )}
-
-      {/* PROGRAM PROGRESS */}
+      {/* PROGRAM PROGRESS — deliberately down to two numbers and a bar.
+          This card used to carry six: a big week counter, a total, a percentage bar, a dial,
+          and a done/scheduled fraction. The dial and the fraction were the same fact twice
+          over, and the mono week block repeated what the bar already showed, so the whole
+          card read as a wall of digits rather than a status. Progress through the program on
+          the left, sessions kept on the right, one bar. Full stats are a tap away. */}
       {active && (
         <button onClick={() => setView("stats")} style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", border: `1px solid ${C.onDarkLine}`, background: `linear-gradient(150deg, ${C.graphite2}, ${C.graphite})`, borderRadius: 16, padding: 20, marginBottom: 14, WebkitTapHighlightColor: "transparent" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-            <div><Eyebrow dark>{paused ? "Program paused" : "Active program"}</Eyebrow><div style={{ fontFamily: SANS, fontSize: 22, fontWeight: 680, color: C.onDark, marginTop: 6 }}>{active.name}</div></div>
-            <div style={{ textAlign: "right" }}><div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 600, color: C.onDark, lineHeight: 1 }}>{String(programWeek(active)).padStart(2, "0")}</div><div style={{ fontFamily: MONO, fontSize: 10, color: C.onDarkSub, marginTop: 3 }}>/ {active.weeks} WEEKS</div></div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
+            <div style={{ minWidth: 0 }}>
+              <Eyebrow dark>{paused ? "Program paused" : "Active program"}</Eyebrow>
+              <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 500, color: C.onDark, marginTop: 6, letterSpacing: -0.3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{active.name}</div>
+            </div>
+            <ChevronRight size={18} color={C.onDarkSub} style={{ flexShrink: 0 }} />
           </div>
-          <div style={{ height: 5, background: C.onDarkLine, borderRadius: 3, marginBottom: 18, overflow: "hidden" }}><div style={{ width: `${Math.min(100, (programWeek(active) / active.weeks) * 100)}%`, height: "100%", background: paused ? C.amber : ACC, borderRadius: 3 }} /></div>
+          <div style={{ height: 5, background: C.onDarkLine, borderRadius: 3, marginBottom: 12, overflow: "hidden" }}><div style={{ width: `${Math.min(100, (programWeek(active) / active.weeks) * 100)}%`, height: "100%", background: paused ? C.amber : ACC, borderRadius: 3 }} /></div>
           {(() => {
             const done = sessionsFor(history, active.id).length;
             // Never let the denominator fall below what was actually completed. You cannot
             // have trained more sessions than were ever scheduled, so if the two disagree
             // it is the schedule count that is wrong, and printing "2 of 1" is indefensible.
             const scheduled = Math.max(done, scheduledSoFar(active, history));
-            const pct = scheduled ? Math.min(100, Math.round((done / scheduled) * 100)) : 0;
-            if (scheduled === 0) return (
-              <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-                <Dial pct={0} />
-                <div><Eyebrow dark>Consistency</Eyebrow><div style={{ fontFamily: SANS, fontSize: 15, color: C.onDark, fontWeight: 500, marginTop: 8, lineHeight: 1.4 }}>Just getting started —<br />your first session is<br />coming up</div></div>
+            const line = { fontFamily: SANS, fontSize: 13, color: C.onDarkSub, fontVariantNumeric: "tabular-nums" };
+            return (
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+                <span style={line}>Week <b style={{ color: C.onDark, fontWeight: 500 }}>{programWeek(active)}</b> of {active.weeks}{paused ? " · paused" : ""}</span>
+                <span style={line}>{scheduled === 0 ? "First session coming up" : <><b style={{ color: C.onDark, fontWeight: 500 }}>{done}</b> of {scheduled} sessions kept</>}</span>
               </div>
             );
-            return (<div style={{ display: "flex", alignItems: "center", gap: 18 }}><Dial pct={pct} /><div><Eyebrow dark>Consistency</Eyebrow><div style={{ fontFamily: SANS, fontSize: 15, color: C.onDark, fontWeight: 500, marginTop: 8, lineHeight: 1.4 }}><span style={{ fontFamily: MONO, fontWeight: 600 }}>{done}</span> of <span style={{ fontFamily: MONO, fontWeight: 600 }}>{scheduled}</span> workout{scheduled !== 1 ? "s" : ""}<br />done so far{paused ? " · paused" : ""}</div></div></div>); })()}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 5, marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.onDarkLine}` }}><span style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: 1.2, color: C.onDarkSub, textTransform: "uppercase" }}>View full stats</span><ChevronRight size={15} color={C.onDarkSub} /></div>
+          })()}
         </button>
       )}
 
@@ -1656,27 +1680,55 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
           );
         })()}
 
-        {/* TOTAL VOLUME */}
+        {/* TOTAL VOLUME — one bar per week.
+            This was a line chart and it misled twice over: the run of untrained weeks before
+            the program started drew a flat stretch at the left, and the week in progress
+            pulled the right-hand end down into what looked like a taper. Bars fix the second
+            problem on their own — a short bar reads as "less so far", where a falling line
+            reads as a trend — and weeklyVolume now drops the first. The live week is drawn
+            faded and called out by name, and the percentage compares whole weeks only. */}
         {(() => {
           const series = weeklyVolume(sessionsFor(history, active.id));
-          const data = series.map((p) => ({ x: p.label, v: +fmtW(p.kg, u).toFixed(1) }));
-          const nonZero = series.filter((p) => p.kg > 0);
-          if (nonZero.length < 2) return null;
-          const first = nonZero[0].kg, last = nonZero[nonZero.length - 1].kg;
-          const pctChange = first > 0 ? Math.round(((last - first) / first) * 100) : null;
+          if (series.length < 2) return null;
+          const data = series.map((p) => ({ x: p.label, v: +fmtW(p.kg, u).toFixed(1), current: !!p.current }));
+          const complete = series.filter((p) => !p.current);
+          const liveWk = series.find((p) => p.current);
+          const lastFull = complete[complete.length - 1];
+          const firstFull = complete[0];
+          const pctChange = complete.length >= 2 && firstFull.kg > 0 ? Math.round(((lastFull.kg - firstFull.kg) / firstFull.kg) * 100) : null;
+          const cap = { fontFamily: SANS, fontSize: 9, fontWeight: 500, letterSpacing: 1.1, textTransform: "uppercase", color: NEU.n600, whiteSpace: "nowrap" };
+          const val = { fontFamily: SANS, fontSize: 17, fontWeight: 500, color: C.ink, marginTop: 4, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" };
           return (
             <>
-              <SectionLabel>Total volume</SectionLabel>
-              <Card style={{ padding: "14px 12px 10px", marginBottom: 18 }}>
-                <ResponsiveContainer width="100%" height={60}>
-                  <LineChart data={data} margin={{ top: 4, right: 6, left: 6, bottom: 0 }}>
-                    <Tooltip contentStyle={{ fontFamily: MONO, fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.sub }} formatter={(v) => [`${commas(v)} ${u}`, "Volume"]} />
-                    <Line type="monotone" dataKey="v" stroke={AC.base} strokeWidth={1.5} strokeLinecap="round" dot={false} activeDot={{ r: 3, fill: AC.base }} isAnimationActive={false} />
-                  </LineChart>
+              <SectionLabel>Volume per week</SectionLabel>
+              <Card style={{ padding: "14px 12px 12px", marginBottom: 18 }}>
+                <ResponsiveContainer width="100%" height={72}>
+                  <BarChart data={data} margin={{ top: 4, right: 2, left: 2, bottom: 0 }} barCategoryGap="24%">
+                    <Tooltip cursor={{ fill: NEU.n900 }}
+                      contentStyle={{ fontFamily: MONO, fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }}
+                      itemStyle={{ color: C.ink }} labelStyle={{ color: C.sub }}
+                      formatter={(v, n, pl) => [`${commas(v)} ${u}${pl?.payload?.current ? " so far" : ""}`, "Volume"]} />
+                    <Bar dataKey="v" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                      {data.map((d, i) => <Cell key={i} fill={d.current ? AC.a800 : AC.base} />)}
+                    </Bar>
+                  </BarChart>
                 </ResponsiveContainer>
-                <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 4px 0" }}>
-                  <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, fontVariantNumeric: "tabular-nums" }}>{kFmt(fmtW(first, u))} {u}</span>
-                  <span style={{ fontFamily: SANS, fontSize: 11, color: AC.a300, fontVariantNumeric: "tabular-nums" }}>{kFmt(fmtW(last, u))} {u}{pctChange != null ? ` · ${pctChange >= 0 ? "+" : ""}${pctChange}%` : ""}</span>
+                <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 10, paddingTop: 11, borderTop: `1px solid ${C.lineSoft}` }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={cap}>Last full week</div>
+                    <div style={val}>{kFmt(fmtW(lastFull.kg, u))} {u}
+                      {pctChange != null && <span style={{ fontSize: 12.5, color: pctChange >= 0 ? C.green : C.sub, marginLeft: 5 }}>{pctChange >= 0 ? "+" : ""}{pctChange}% since {firstFull.label}</span>}
+                    </div>
+                  </div>
+                  {liveWk && (
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <div style={cap}>This week so far</div>
+                      <div style={{ ...val, color: AC.a300 }}>{kFmt(fmtW(liveWk.kg, u))} {u}</div>
+                    </div>
+                  )}
+                </div>
+                <div style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, marginTop: 9, lineHeight: 1.45 }}>
+                  One bar per week, {series[0].label} to now. The faded bar is this week, still in progress — it is short because the week is not over.
                 </div>
               </Card>
             </>
@@ -1844,7 +1896,8 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
         const Arrow = rec.dir === "up" ? ArrowUp : rec.dir === "down" ? ArrowDown : ArrowRight;
         const dirColor = rec.dir === "up" ? C.green : rec.dir === "down" ? C.red : C.sub;
         const bw = isBW(exx.id);
-        const prev = exx.last?.logged ? (exx.last.w > 0 ? `${wStr(exx.last.w, u)}×${exx.last.reps}` : `${exx.last.reps}`) : "—";
+        const lastLog = lastSetsFor(history, exx.id, live.dateKey);
+        const lastTxt = (i) => { const x = lastLog?.sets[i]; return x ? (x.w > 0 ? `${wStr(x.w, u)}×${x.reps}` : `${x.reps}`) : null; };
         const th = { flex: 1, fontFamily: MONO, fontSize: 10, letterSpacing: .8, color: C.faint, textAlign: "center" };
 
         // completed / current / upcoming — only the current exercise stays expanded
@@ -1889,12 +1942,15 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
                 be inferred from a number sitting on screen. */}
             {(specs || []).some((s) => s?.kind === "amrap") && (
               <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, lineHeight: 1.45, margin: "-4px 2px 11px" }}>
-                On the AMRAP set, stop with 1–2 reps still in the tank{exx.last?.logged ? ` — last time you got ${exx.last.reps}` : ""}.
+                On the AMRAP set, stop with 1–2 reps still in the tank{lastLog ? ` — last time you got ${lastLog.sets[lastLog.sets.length - 1].reps}` : ""}.
               </div>
             )}
+            <div style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, margin: "0 2px 7px" }}>
+              {lastLog ? `Last time · ${WD_LONG[new Date(lastLog.date).getDay()].slice(0, 3)} ${new Date(lastLog.date).getDate()} ${MON[new Date(lastLog.date).getMonth()]}` : "No previous record for this exercise yet."}
+            </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 7px" }}>
               <div style={{ width: 26, fontFamily: MONO, fontSize: 10, letterSpacing: .8, color: C.faint, textAlign: "left" }}>SET</div>
-              <div style={th}>{specs ? "TARGET · LAST" : "PREV"}</div>
+              <div style={th}>{specs ? "TARGET / LAST" : "LAST"}</div>
               <div style={th}>{bw ? "+" + u.toUpperCase() : u.toUpperCase()}</div>
               <div style={th}>REPS</div>
               <div style={{ width: 48 }} />
@@ -1906,17 +1962,21 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
               // On an AMRAP, last session's reps are the useful thing to see — the target
               // column would otherwise just read "AMRAP", which tells you nothing. Shown as
               // context, deliberately not framed as a number to beat.
-              const lastAmrap = exx.last?.logged ? exx.last.reps : null;
               const target = spec
-                ? (spec.kind === "amrap"
-                    ? <span style={{ color: ACC, fontWeight: 700 }}>AMRAP{lastAmrap ? <span style={{ color: NEU.n600, fontWeight: 400 }}> · {lastAmrap}</span> : null}</span>
-                    : `${spec.reps} reps`)
-                : prev;
+                ? (spec.kind === "amrap" ? <span style={{ color: ACC, fontWeight: 700 }}>AMRAP</span> : `${spec.reps} reps`)
+                : null;
+              const wasTxt = lastTxt(si);
               return (
                 <div key={si}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0" }}>
                     <div style={{ width: 26, fontFamily: MONO, fontSize: 13, fontWeight: 600, color: C.faint, textAlign: "left" }}>{si + 1}</div>
-                    <div style={{ flex: 1, textAlign: "center", fontFamily: MONO, fontSize: 12, color: C.faint }}>{target}</div>
+                    {/* Target above, what you actually did last time below. Matched by set
+                        number, so set 3 shows set 3 — not a single summary repeated down
+                        the column. */}
+                    <div style={{ flex: 1, textAlign: "center", lineHeight: 1.25, minWidth: 0 }}>
+                      {target && <div style={{ fontFamily: MONO, fontSize: 12, color: C.faint }}>{target}</div>}
+                      <div style={{ fontFamily: MONO, fontSize: target ? 10.5 : 12, color: target ? NEU.n600 : C.faint }}>{wasTxt || "—"}</div>
+                    </div>
                     <div style={cell}><input inputMode="decimal" placeholder={bw ? "BW" : "—"} value={sd.w || ""} onChange={(e) => upd(key, "w", e.target.value)} style={inp} /></div>
                     <div style={cell}><input inputMode="numeric" placeholder={spec ? String(spec.reps) : "—"} value={sd.reps || ""} onChange={(e) => upd(key, "reps", e.target.value)} style={inp} /></div>
                     <button
