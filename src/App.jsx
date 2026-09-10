@@ -2993,17 +2993,19 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
 ================================================================ */
 const HEAT_LEGEND = [NEU.n900, AC.a800, AC.a700, AC.base];
 
-function HeatGrid({ habits, weeks, onPickDay, selKey }) {
+// selWeek is the Monday of the week showing in the grid above, so the whole row lights
+// up rather than one square of it — the unit you select here is a week, not a day.
+function HeatGrid({ habits, weeks, onPickDay, selWeek }) {
   const end = startOfDay(new Date());
   const start = addDays(mondayOf(end), -(weeks - 1) * 7);
   const cells = Array.from({ length: weeks * 7 }).map((_, i) => {
     const dt = addDays(start, i), key = ymd(dt);
-    return { key, dt, future: dt > end, pct: dt > end ? null : habitDayPct(habits, key), isToday: sameDay(dt, end) };
+    return { key, dt, future: dt > end, pct: dt > end ? null : habitDayPct(habits, key), isToday: sameDay(dt, end), inSel: selWeek ? ymd(mondayOf(dt)) === selWeek : false };
   });
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 5 }}>
       {cells.map((c) => {
-        const sel = c.key === selKey && !c.isToday;
+        const sel = c.inSel && !c.isToday;
         return (
           <button key={c.key} onClick={c.future || !onPickDay ? undefined : () => onPickDay(c.key)}
             aria-label={`${c.dt.getDate()} ${MON[c.dt.getMonth()]}${c.pct != null ? ` — ${c.pct}%` : ""}`}
@@ -3263,7 +3265,7 @@ function Habits({ habits, setHabits, friendsApi }) {
         <Card style={{ padding: 14, marginBottom: 18 }}>
           {/* Tapping a square takes the grid above to that week, which is the quickest route
               back to a day you forgot. */}
-          <HeatGrid habits={habits} weeks={3} selKey={ymd(weekStart)} onPickDay={(k) => setWkOffset(Math.round((mondayOf(new Date(k)).getTime() - mondayOf(new Date()).getTime()) / (7 * DAYMS)))} />
+          <HeatGrid habits={habits} weeks={3} selWeek={ymd(weekStart)} onPickDay={(k) => setWkOffset(Math.round((mondayOf(new Date(k)).getTime() - mondayOf(new Date()).getTime()) / (7 * DAYMS)))} />
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}` }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 500, color: ahead == null ? C.sub : ahead >= 0 ? AC.a300 : C.sub }}>
