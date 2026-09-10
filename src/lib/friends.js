@@ -144,3 +144,58 @@ export async function fetchFriendQuotes(user, friends, limit = 12) {
   const nameById = Object.fromEntries(friends.map((f) => [f.userId, f.name]));
   return ok((data || []).map((q) => ({ ...q, name: nameById[q.user_id] || "Friend" })));
 }
+
+/* ---------- per-friend habit sharing ----------
+   Rows are addressed: one per (habit, viewer). Nothing is filtered client side, because
+   the row a friend is not meant to see is never written in the first place. The caller
+   builds the payload, since streaks and day keys are the app's arithmetic, not this
+   module's. */
+
+export async function publishHabits(user, rows) {
+  if (!syncConfigured || !user) return fail("not signed in");
+  const wanted = (rows || []).map((r) => ({
+    owner_id: user.id, viewer_id: r.viewerId, local_id: r.localId,
+    name: r.name, streak: r.streak || 0, days: r.days || {}, updated_at: new Date().toISOString(),
+  }));
+  if (wanted.length) {
+    const { error } = await supabase.from("shared_habits").upsert(wanted, { onConflict: "owner_id,viewer_id,local_id" });
+    if (error) return fail(error);
+  }
+  // Withdraw anything no longer shared. A composite "not in" is not expressible as a
+  // filter, so read back the ids we own and delete the difference — un-sharing has to
+  // actually remove the row, not just stop refreshing it.
+  const { data, error: re } = await supabase.from("shared_habits").select("id,viewer_id,local_id").eq("owner_id", user.id);
+  if (re) return fail(re);
+  const keep = new Set(wanted.map((r) => `${r.viewer_id}|${r.local_id}`));
+  const stale = (data || []).filter((r) => !keep.has(`${r.viewer_id}|${r.local_id}`)).map((r) => r.id);
+  if (stale.length) {
+    const { error } = await supabase.from("shared_habits").delete().in("id", stale);
+    if (error) return fail(error);
+  }
+  return ok(true);
+}
+
+export async function fetchFriendHabits(user) {
+  if (!syncConfigured || !user) return ok([]);
+  const { data, error } = await supabase.from("shared_habits")
+    .select("owner_id,local_id,name,streak,days,updated_at").eq("viewer_id", user.id);
+  return error ? fail(error) : ok(data || []);
+}
+
+/* ---------- high fives ---------- */
+
+export async function sendHighFive(user, toId, localId) {
+  if (!syncConfigured || !user) return fail("not signed in");
+  const { error } = await supabase.from("high_fives").insert({ from_id: user.id, to_id: toId, local_id: localId || null });
+  return error ? fail(error) : ok(true);
+}
+
+// Both directions: what you have been sent, and what you sent, so the button can show that
+// it already landed rather than inviting you to send five in a row.
+export async function fetchHighFives(user, sinceDays = 3) {
+  if (!syncConfigured || !user) return ok([]);
+  const since = new Date(Date.now() - sinceDays * 86400000).toISOString();
+  const { data, error } = await supabase.from("high_fives")
+    .select("id,from_id,to_id,local_id,created_at").gte("created_at", since).order("created_at", { ascending: false });
+  return error ? fail(error) : ok(data || []);
+}

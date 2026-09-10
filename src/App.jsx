@@ -22,6 +22,8 @@ import {
   CheckCircleIcon as CheckCircle, CircleIcon as Circle, CircleDashedIcon as CircleDashed, CaretDownIcon as CaretDown,
   CaretUpIcon as CaretUp, DotsThreeIcon as DotsThree, TagIcon as Tag, QuotesIcon as Quotes,
   CarIcon as Car, GearSixIcon as GearSix, BellIcon as Bell,
+  XCircleIcon as XCircle, MinusCircleIcon as MinusCircle, HandsClappingIcon as HandsClapping,
+  UsersThreeIcon as UsersThree,
 } from "@phosphor-icons/react";
 import EXERCISES_DATA from "./data/exercises.json";
 import { PROGRAM_CATALOG } from "./data/programCatalog";
@@ -251,16 +253,19 @@ function useSync() {
    Publishes a deliberately small slice: a monthly percentage covering only the habits you
    marked visible, and the quotes you chose to write down. Names, daily records, training,
    weight and finance are never sent. */
-function useFriends(sync, habits, read, profile) {
+function useFriends(sync, habits, setHabits, read, profile) {
   const [friends, setFriends] = useState([]);
   const [incoming, setIncoming] = useState([]);
   const [sent, setSent] = useState([]);
   const [quotes, setQuotes] = useState([]);
+  const [friendHabits, setFriendHabits] = useState([]);
+  const [highFives, setHighFives] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const user = sync?.user || null;
 
   const refresh = useCallback(async () => {
-    if (!user) { setFriends([]); setIncoming([]); setSent([]); setQuotes([]); return; }
+    if (!user) { setFriends([]); setIncoming([]); setSent([]); setQuotes([]); setFriendHabits([]); setHighFives([]); setLoaded(false); return; }
     setBusy(true);
     const [f, i, s] = await Promise.all([Friends.listFriends(user), Friends.listIncomingInvites(user), Friends.listSentInvites(user)]);
     const list = f.ok ? f.data : [];
@@ -268,28 +273,70 @@ function useFriends(sync, habits, read, profile) {
     setFriends(withStats.ok ? withStats.data : list);
     setIncoming(i.ok ? i.data : []);
     setSent(s.ok ? s.data : []);
-    const q = await Friends.fetchFriendQuotes(user, list);
+    const [q, fh, hv] = await Promise.all([Friends.fetchFriendQuotes(user, list), Friends.fetchFriendHabits(user), Friends.fetchHighFives(user)]);
     setQuotes(q.ok ? q.data : []);
+    setFriendHabits(fh.ok ? fh.data : []);
+    setHighFives(hv.ok ? hv.data : []);
     setBusy(false);
+    setLoaded(true);
   }, [user]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Keep your published slice current. Only visible habits count towards the percentage,
-  // so turning one off genuinely removes it from what friends see.
+  // One-time rewrite of the old single switch into explicit per-friend grants. Waits for
+  // the friend list to have actually loaded, because doing it against an empty list would
+  // silently un-share everything.
+  useEffect(() => {
+    if (!user || !loaded || !setHabits) return;
+    if (!(habits || []).some((h) => !Array.isArray(h.sharedWith))) return;
+    const ids = friends.map((f) => f.userId);
+    setHabits((hs) => hs.map((h) => Array.isArray(h.sharedWith) ? h : { ...h, sharedWith: h.visibleToFriends ? ids : [] }));
+  }, [user, loaded, friends, habits, setHabits]);
+
+  // One row per (habit, friend). Building it here rather than in lib/friends keeps the
+  // streak and day-key arithmetic in the one place that already owns it.
+  const habitRows = useMemo(() => {
+    if (!user || !friends.length) return [];
+    const rows = [];
+    (habits || []).forEach((h) => friends.forEach((f) => {
+      if (habitSharedWith(h, f.userId)) rows.push({ viewerId: f.userId, localId: h.id, name: h.name, streak: habitStreak(h), days: habitRecentDays(h) });
+    }));
+    return rows;
+  }, [user, friends, habits]);
+
+  // Ticking a habit must not mean a network write per tap. The payload is compared against
+  // what was last sent and only a genuine change is published, after a pause.
+  const lastPublished = useRef(null);
+  useEffect(() => {
+    if (!user || !loaded) return;
+    const sig = JSON.stringify(habitRows);
+    if (sig === lastPublished.current) return;
+    const t = setTimeout(() => { lastPublished.current = sig; Friends.publishHabits(user, habitRows); }, 2500);
+    return () => clearTimeout(t);
+  }, [user, loaded, habitRows]);
+
+  const sendFive = useCallback(async (toId, localId) => {
+    if (!user) return { ok: false, reason: "not signed in" };
+    const r = await Friends.sendHighFive(user, toId, localId);
+    if (r.ok) setHighFives((hs) => [{ id: `tmp${Date.now()}`, from_id: user.id, to_id: toId, local_id: localId || null, created_at: new Date().toISOString() }, ...hs]);
+    return r;
+  }, [user]);
+
+  // Keep your published slice current. Only habits shared with somebody count towards the
+  // percentage, so switching the last person off genuinely removes it from what is shown.
   useEffect(() => {
     if (!user) return;
-    const shared = (habits || []).filter((h) => h.visibleToFriends);
+    const shared = (habits || []).filter((h) => friends.some((f) => habitSharedWith(h, f.userId)));
     const month = ymd(new Date()).slice(0, 7);
     const stats = shared.length ? habitMonthStats(shared, new Date()) : { pct: null };
     const streak = shared.length ? Math.max(0, ...shared.map((h) => habitStreak(h))) : 0;
     Friends.ensureProfile(user, profile?.name);
     Friends.publishStats(user, { month, pct: stats.pct ?? 0, count: shared.length, streak });
-  }, [user, habits, profile?.name]);
+  }, [user, habits, friends, profile?.name]);
 
   useEffect(() => { if (user) Friends.publishQuotes(user, read?.quotes || []); }, [user, read?.quotes]);
 
-  return { user, friends, incoming, sent, quotes, busy, refresh };
+  return { user, friends, incoming, sent, quotes, friendHabits, highFives, busy, refresh, sendFive };
 }
 
 const timeAgo = (iso) => {
@@ -525,6 +572,23 @@ const habitMonthStats = (habits, monthDate) => {
 };
 // same thresholds the Today week tracker uses
 const heatColor = (pct) => (pct == null || pct === 0 ? NEU.n900 : pct >= 90 ? AC.base : pct >= 50 ? AC.a700 : AC.a800);
+
+/* ===== who can see a habit =====
+   Per habit AND per friend, and off until you say otherwise. `sharedWith` holds friend
+   user ids. Habits written before this existed only had one visibleToFriends switch; they
+   read here as "shared with everyone you were connected to at the time", and useFriends
+   rewrites them into explicit grants on the first run where the friend list is known — so
+   nothing already shared stops being shared, and nothing quietly starts being shared with
+   someone you add next month. */
+const habitSharedWith = (h, friendId) => (Array.isArray(h?.sharedWith) ? h.sharedWith.includes(friendId) : !!h?.visibleToFriends);
+// The window a friend is shown: four weeks of marked days, and only the marked ones.
+const HABIT_SHARE_DAYS = 28;
+const habitRecentDays = (h) => {
+  const out = {};
+  for (let i = 0; i < HABIT_SHARE_DAYS; i++) { const k = ymd(addDays(startOfDay(new Date()), -i)); const st = habitState(h, k); if (st) out[k] = st; }
+  return out;
+};
+const habitShareHorizon = () => ymd(addDays(startOfDay(new Date()), -(HABIT_SHARE_DAYS - 1)));
 
 /* ===== reading ===== */
 const READ_DEFAULT = { goalMin: 20, when: "before bed", log: {}, quotes: [] };
@@ -2647,8 +2711,9 @@ function Picker({ inDay, onToggle, onBack, dayName }) {
    SETTINGS — a bottom sheet off the Today avatar, not a tab of its own
 ================================================================ */
 const cmToFtIn = (cm) => { const t = cm / 2.54; const f = Math.floor(t / 12); const i = Math.round(t - f * 12); return `${f}'${i}"`; };
-function FriendsSheet({ friendsApi, onClose }) {
-  const { user, friends, incoming, sent, refresh } = friendsApi;
+function FriendsSheet({ friendsApi, habits, onClose }) {
+  const { user, incoming, sent, refresh } = friendsApi;
+  const friends = (friendsApi.friends || []).map((f) => ({ ...f, shares: (Array.isArray(habits) ? habits : []).filter((h) => habitSharedWith(h, f.userId)).length }));
   const [email, setEmail] = useState("");
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -2664,7 +2729,7 @@ function FriendsSheet({ friendsApi, onClose }) {
           <button onClick={onClose} style={miniRound}><X size={17} /></button>
         </div>
         <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub, lineHeight: 1.55, marginBottom: 16 }}>
-          Friends see the percentage of your visible habits hit this month, and any quotes you write down. They never see your training, your weight or your finances.
+          Sharing is chosen habit by habit and person by person, and everything starts off. Someone you switch on sees that habit by name, its current run and the last four weeks of ticks — set that up on the Habits screen. Quotes you write down are shared with everyone connected. Nobody ever sees your training, your weight or your finances.
         </div>
 
         <div style={finLabel}>Invite by email</div>
@@ -2700,7 +2765,7 @@ function FriendsSheet({ friendsApi, onClose }) {
               <div style={{ width: 30, height: 30, flexShrink: 0, borderRadius: 15, border: `1px solid ${AC.a800}`, background: AC.a900, color: NEU.n200, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 12 }}>{(f.name || "?").trim().charAt(0).toUpperCase()}</div>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</div>
-                <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 2 }}>sees your habits and quotes</div>
+                <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 2 }}>{f.shares === 0 ? "sees no habits yet" : `sees ${f.shares} habit${f.shares === 1 ? "" : "s"}`} · sees your quotes</div>
               </div>
             </div>
             <button disabled={busy} onClick={() => run(() => Friends.removeFriend(f.id), "Removed.")} style={{ ...small, border: `1px solid ${C.line}`, color: C.sub }}>Remove</button>
@@ -2724,7 +2789,7 @@ function FriendsSheet({ friendsApi, onClose }) {
   );
 }
 
-function SettingsSheet({ profile, setProfile, programs, history, weightLog, onReset, equipment, setEquipment, fin, setFin, sync, friendsApi, onClose }) {
+function SettingsSheet({ profile, setProfile, programs, history, weightLog, onReset, equipment, setEquipment, fin, setFin, sync, friendsApi, habits, onClose }) {
   const [view, setView] = useState("main");
   const [confirmReset, setConfirmReset] = useState(false);
   const [editingEquip, setEditingEquip] = useState(false);
@@ -2914,7 +2979,7 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
       </Card>
         </>)}
         {editingEquip && <EquipmentManager equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setEditingEquip(false)} />}
-        {friendsOpen && <FriendsSheet friendsApi={friendsApi} onClose={() => setFriendsOpen(false)} />}
+        {friendsOpen && <FriendsSheet friendsApi={friendsApi} habits={habits} onClose={() => setFriendsOpen(false)} />}
       </div>
     </div>
   );
@@ -2960,10 +3025,14 @@ const HeatLegend = () => (
   </div>
 );
 
-function HabitSheet({ habit, onSave, onDelete, onClose }) {
+function HabitSheet({ habit, friendsApi, onSave, onDelete, onClose }) {
   const [name, setName] = useState(habit.name || "");
   const [detail, setDetail] = useState(habit.detail || "");
-  const [visible, setVisible] = useState(!!habit.visibleToFriends);
+  const friends = friendsApi?.friends || [];
+  // Seeded from whatever is in effect now, including the legacy single switch, so opening
+  // and saving a habit never silently changes who can see it.
+  const [shared, setShared] = useState(() => friends.filter((f) => habitSharedWith(habit, f.userId)).map((f) => f.userId));
+  const toggleShare = (id) => setShared((xs) => xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]);
   const [confirmDel, setConfirmDel] = useState(false);
   const field = { width: "100%", background: C.page, border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 13px", fontFamily: SANS, fontSize: 15, color: C.ink, outline: "none" };
   const btn = { flex: 1, height: 44, borderRadius: 8, background: "none", cursor: "pointer", fontFamily: SANS, fontSize: 14.5, fontWeight: 500, WebkitTapHighlightColor: "transparent" };
@@ -2975,18 +3044,31 @@ function HabitSheet({ habit, onSave, onDelete, onClose }) {
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Habit name" style={{ ...field, fontSize: 17, marginBottom: 14 }} />
         <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, marginBottom: 6 }}>Details</div>
         <textarea value={detail} onChange={(e) => setDetail(e.target.value)} rows={3} placeholder="What does doing this actually look like?" style={{ ...field, resize: "none", lineHeight: 1.5, marginBottom: 16 }} />
-        {/* Off unless you say otherwise, and the current state written out rather than left
-            to the reader to infer from a switch position. */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: C.page, borderRadius: 8, padding: "12px 13px", marginBottom: 16 }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>Visible to friends</div>
-            <div style={{ fontFamily: SANS, fontSize: 11.5, color: visible ? AC.a300 : NEU.n600, marginTop: 3, lineHeight: 1.45 }}>
-              {visible
-                ? "Counted in the monthly percentage your friends see. The name and your day-by-day record stay private."
-                : "Off. Nothing about this habit leaves your device."}
-            </div>
+        {/* Chosen friend by friend, not one switch for everybody. Off for all of them until
+            you turn someone on, and what they get is spelled out rather than left to be
+            guessed at from a toggle. */}
+        <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, marginBottom: 6 }}>Who can see this</div>
+        {friends.length === 0 ? (
+          <div style={{ background: C.page, borderRadius: 8, padding: "12px 13px", marginBottom: 16, fontFamily: SANS, fontSize: 12.5, color: NEU.n600, lineHeight: 1.5 }}>
+            Nobody is connected yet. Add someone under Settings, Friends, and they will appear here to choose from.
           </div>
-          <Switch on={visible} onToggle={() => setVisible((v) => !v)} />
+        ) : (
+          <div style={{ background: C.page, borderRadius: 8, padding: "4px 13px", marginBottom: 10 }}>
+            {friends.map((f, i) => (
+              <div key={f.userId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 0", borderBottom: i === friends.length - 1 ? "none" : `1px solid ${C.lineSoft}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+                  <div style={{ width: 26, height: 26, flexShrink: 0, borderRadius: 13, border: `1px solid ${AC.a800}`, background: AC.a900, color: NEU.n200, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 11 }}>{(f.name || "?").trim().charAt(0).toUpperCase()}</div>
+                  <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</span>
+                </div>
+                <Switch on={shared.includes(f.userId)} onToggle={() => toggleShare(f.userId)} />
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ fontFamily: SANS, fontSize: 11.5, color: shared.length ? AC.a300 : NEU.n600, marginBottom: 16, lineHeight: 1.5 }}>
+          {shared.length
+            ? `${shared.length} ${shared.length === 1 ? "person sees" : "people see"} this habit by name, its current run, and the last four weeks of ticks. Nothing else.`
+            : "Off for everyone. Nothing about this habit leaves your device."}
         </div>
         {habit.id && (confirmDel ? (
           <div style={{ background: C.redBg, borderRadius: 8, padding: 13, marginBottom: 16 }}>
@@ -3001,7 +3083,7 @@ function HabitSheet({ habit, onSave, onDelete, onClose }) {
         ))}
         <div style={{ display: "flex", gap: 9 }}>
           <button onClick={onClose} style={{ ...btn, border: `1px solid ${C.line}`, color: C.sub }}>Cancel</button>
-          <button onClick={() => name.trim() && onSave({ name: name.trim(), detail: detail.trim(), visibleToFriends: visible })} style={{ ...btn, border: `1px solid ${name.trim() ? AC.base : C.line}`, color: name.trim() ? ACC : C.faint }}>Save</button>
+          <button onClick={() => name.trim() && onSave({ name: name.trim(), detail: detail.trim(), sharedWith: shared })} style={{ ...btn, border: `1px solid ${name.trim() ? AC.base : C.line}`, color: name.trim() ? ACC : C.faint }}>Save</button>
         </div>
       </div>
     </div>
@@ -3053,23 +3135,43 @@ function MonthHistorySheet({ habits, onClose }) {
   );
 }
 
+// One day cell. Shape carries the meaning as well as colour, so the three states stay
+// apart for anyone who reads colour poorly, and at the size these render on a phone.
+function HabitDot({ state, size = 21 }) {
+  if (state === HABIT_GREEN) return <CheckCircle size={size} weight="fill" color={C.green} />;
+  if (state === HABIT_ORANGE) return <MinusCircle size={size} weight="fill" color={C.amber} />;
+  if (state === HABIT_RED) return <XCircle size={size} weight="fill" color={C.red} />;
+  return <Circle size={size} color={NEU.n700} />;
+}
+
+const HABIT_COL = 27; // width of one day column in the week grid
+
 function Habits({ habits, setHabits, friendsApi }) {
   const [sheet, setSheet] = useState(null); // {habit} | "month"
+  const [wkOffset, setWkOffset] = useState(0);
   const todayKey = ymd(new Date());
-  const [selKey, setSelKey] = useState(todayKey);
-  const selDate = startOfDay(new Date(selKey));
-  const isToday = selKey === todayKey;
-  // Future days cannot be marked — you have not had the chance to do them yet.
-  const shiftDay = (n) => { const d = addDays(selDate, n); if (startOfDay(d) > startOfDay(new Date())) return; setSelKey(ymd(d)); };
-  // Only habits that existed on the selected day are markable on it.
-  const active = habitsOn(habits, selKey);
-  const doneToday = active.filter((h) => habitState(h, selKey) === HABIT_GREEN).length;
-  const countedToday = active.filter((h) => habitCounts(habitState(h, selKey))).length;
-  // Tapping cycles unmarked -> green -> orange -> red -> unmarked, so every state is
-  // reachable with repeat taps and nothing needs a long-press or a menu. Marks whichever
-  // day is selected, so a day you forgot can be filled in after the fact.
-  const cycle = (id) => cycleHabitOn(setHabits, id, selKey);
-  const save = (id, patch) => setHabits((hs) => id ? hs.map((h) => h.id === id ? { ...h, ...patch } : h) : [...hs, { id: `hb_${Date.now()}`, createdAt: new Date().toISOString(), ticks: {}, visibleToFriends: false, ...patch }]);
+  const today0 = startOfDay(new Date());
+  const weekStart = addDays(mondayOf(new Date()), wkOffset * 7);
+  const wkStartKey = ymd(weekStart), wkEndKey = ymd(addDays(weekStart, 6));
+  const days = Array.from({ length: 7 }).map((_, i) => {
+    const dt = addDays(weekStart, i);
+    return { dt, key: ymd(dt), dow: dt.getDay(), future: startOfDay(dt) > today0, isToday: sameDay(dt, new Date()) };
+  });
+  // Anything alive at any point in the week on screen. A habit added on Thursday still gets
+  // a row on the Monday, with the days before it existed drawn as unavailable rather than
+  // missed — there was nothing there to miss.
+  const shown = (Array.isArray(habits) ? habits : []).filter((h) =>
+    ymd(new Date(h.createdAt)) <= wkEndKey && (!h.archivedAt || wkStartKey < ymd(new Date(h.archivedAt))));
+  const liveOn = (h, key) => ymd(new Date(h.createdAt)) <= key && (!h.archivedAt || key < ymd(new Date(h.archivedAt)));
+
+  const todayHabits = habitsOn(habits, todayKey);
+  const doneToday = todayHabits.filter((h) => habitState(h, todayKey) === HABIT_GREEN).length;
+  const countedToday = todayHabits.filter((h) => habitCounts(habitState(h, todayKey))).length;
+
+  const cycle = (id, key) => cycleHabitOn(setHabits, id, key);
+  const myFriends = friendsApi?.friends || [];
+  const shareCount = (h) => myFriends.filter((f) => habitSharedWith(h, f.userId)).length;
+  const save = (id, patch) => setHabits((hs) => id ? hs.map((h) => h.id === id ? { ...h, ...patch } : h) : [...hs, { id: `hb_${Date.now()}`, createdAt: new Date().toISOString(), ticks: {}, sharedWith: [], ...patch }]);
   const remove = (id) => setHabits((hs) => hs.filter((h) => h.id !== id));
 
   const thisMonth = habitMonthStats(habits, new Date());
@@ -3079,57 +3181,73 @@ function Habits({ habits, setHabits, friendsApi }) {
   return (
     <div style={{ padding: "6px 17px 24px" }}>
       <div style={{ fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500 }}>
-        {active.length ? `${doneToday} of ${countedToday} done${countedToday < active.length ? ` · ${active.length - countedToday} not counting` : ""}` : "Nothing tracked yet"}
+        {todayHabits.length ? `${doneToday} of ${countedToday} done today${countedToday < todayHabits.length ? ` · ${todayHabits.length - countedToday} not counting` : ""}` : "Nothing tracked yet"}
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, margin: "8px 0 14px" }}>
         <h1 style={{ fontFamily: SANS, fontSize: 27, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.54 }}>Habits</h1>
         <button onClick={() => setSheet({ habit: {} })} aria-label="New habit" style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 16, border: `1px solid ${AC.base}`, background: "none", color: ACC, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}><Plus size={17} /></button>
       </div>
 
-      {/* Day picker. Forgetting to mark a day is normal, so any past day can be filled in. */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12, padding: "0 2px" }}>
-        <button onClick={() => shiftDay(-1)} aria-label="Previous day" style={{ ...miniRound, width: 30, height: 30 }}><ChevronLeft size={15} /></button>
-        <div style={{ textAlign: "center", minWidth: 0 }}>
-          <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 500, color: isToday ? C.ink : AC.a300, whiteSpace: "nowrap" }}>
-            {isToday ? "Today" : `${WD_LONG[selDate.getDay()]} ${selDate.getDate()} ${MON[selDate.getMonth()]}`}
-          </div>
-          {!isToday && <button onClick={() => setSelKey(todayKey)} style={{ background: "none", border: "none", padding: 0, marginTop: 1, cursor: "pointer", fontFamily: SANS, fontSize: 11, color: NEU.n600, WebkitTapHighlightColor: "transparent" }}>Back to today</button>}
+      {/* A whole week at once, every cell tappable. This replaced a one-day checklist with
+          arrows to step between days: you can now see where the week went, and fill in a day
+          you forgot without navigating to it first. */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "0 2px 8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button onClick={() => setWkOffset(wkOffset - 1)} aria-label="Previous week" style={{ background: "none", border: "none", cursor: "pointer", padding: 2, display: "flex", WebkitTapHighlightColor: "transparent" }}><ChevronLeft size={15} color={C.faint} /></button>
+          <Eyebrow>{wkOffset === 0 ? "This week" : `${weekStart.getDate()} ${MON[weekStart.getMonth()]} – ${addDays(weekStart, 6).getDate()} ${MON[addDays(weekStart, 6).getMonth()]}`}</Eyebrow>
+          <button onClick={() => setWkOffset(Math.min(0, wkOffset + 1))} aria-label="Next week" disabled={wkOffset >= 0} style={{ background: "none", border: "none", cursor: wkOffset < 0 ? "pointer" : "default", padding: 2, display: "flex", WebkitTapHighlightColor: "transparent" }}><ChevronRight size={15} color={wkOffset < 0 ? C.faint : "transparent"} /></button>
         </div>
-        <button onClick={() => shiftDay(1)} aria-label="Next day" disabled={isToday} style={{ ...miniRound, width: 30, height: 30, opacity: isToday ? 0.35 : 1, cursor: isToday ? "default" : "pointer" }}><ChevronRight size={15} /></button>
+        {wkOffset !== 0 && <button onClick={() => setWkOffset(0)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: SANS, fontSize: 11, color: ACC, WebkitTapHighlightColor: "transparent" }}>Back to this week</button>}
       </div>
 
-      {active.length === 0 ? (
+      {shown.length === 0 ? (
         <Card style={{ padding: 26, textAlign: "center", marginBottom: 16 }}>
-          <div style={{ fontFamily: SANS, fontSize: 17, fontWeight: 500, color: C.ink, letterSpacing: -0.2 }}>No habits yet</div>
-          <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, margin: "7px 0 16px", lineHeight: 1.55 }}>Add the few things you want to do most days. Two or three is plenty to start.</div>
-          <button onClick={() => setSheet({ habit: {} })} style={{ height: 40, padding: "0 18px", borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Add a habit</button>
+          <div style={{ fontFamily: SANS, fontSize: 17, fontWeight: 500, color: C.ink, letterSpacing: -0.2 }}>{habits.length ? "Nothing tracked that week" : "No habits yet"}</div>
+          <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, margin: "7px 0 16px", lineHeight: 1.55 }}>{habits.length ? "None of your habits existed yet during this week." : "Add the few things you want to do most days. Two or three is plenty to start."}</div>
+          <button onClick={() => habits.length ? setWkOffset(0) : setSheet({ habit: {} })} style={{ height: 40, padding: "0 18px", borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>{habits.length ? "Back to this week" : "Add a habit"}</button>
         </Card>
       ) : (
-        <Card style={{ padding: "4px 15px", marginBottom: 18 }}>
-          {active.map((h, i) => {
-            const st = habitState(h, selKey), streak = habitStreak(h);
-            const dim = st === HABIT_GREEN || st === HABIT_RED;
-            const label = habitStateLabel(st);
+        <Card style={{ padding: "10px 13px 4px", marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 8 }}>
+            <div style={{ flex: 1, minWidth: 0 }} />
+            {days.map((d) => (
+              <div key={d.key} style={{ width: HABIT_COL, textAlign: "center", flexShrink: 0 }}>
+                <div style={{ fontFamily: SANS, fontSize: 9.5, fontWeight: 500, color: d.isToday ? AC.a300 : NEU.n600 }}>{WD_LETTER[d.dow]}</div>
+                <div style={{ fontFamily: SANS, fontSize: 11, color: d.isToday ? C.ink : NEU.n600, marginTop: 1, fontVariantNumeric: "tabular-nums" }}>{d.dt.getDate()}</div>
+              </div>
+            ))}
+          </div>
+          {shown.map((h) => {
+            const streak = habitStreak(h);
+            const sharedCount = shareCount(h);
             return (
-              <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 0", borderBottom: i === active.length - 1 ? "none" : `1px solid ${C.lineSoft}` }}>
-                <button onClick={() => cycle(h.id)} aria-label={`${h.name} — ${label || "not marked"}, tap to change`} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", flexShrink: 0, WebkitTapHighlightColor: "transparent" }}>
-                  {st ? <CheckCircle size={24} weight="fill" color={habitStateColor(st)} /> : <Circle size={24} color={NEU.n700} />}
+              <div key={h.id} style={{ display: "flex", alignItems: "center", borderTop: `1px solid ${C.lineSoft}`, padding: "7px 0" }}>
+                <button onClick={() => setSheet({ habit: h })} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: "0 8px 0 0", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                  <div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 500, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.name}</div>
+                  <div style={{ fontFamily: SANS, fontSize: 11, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: streak > 0 ? AC.a300 : NEU.n600 }}>
+                    {streak > 0 ? `${streak} day run` : "No run yet"}{sharedCount ? ` · shared with ${sharedCount}` : ""}
+                  </div>
                 </button>
-                <button onClick={() => setSheet({ habit: h })} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: 0, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
-                  <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: dim ? NEU.n400 : C.ink, textDecoration: st === HABIT_GREEN ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.name}</div>
-                  <div style={{ fontFamily: SANS, fontSize: 12, color: st ? habitStateColor(st) : NEU.n600, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label || h.detail || "Not marked yet"}</div>
-                </button>
-                <span style={{ fontFamily: SANS, fontSize: 12.5, color: streak > 0 ? AC.a300 : NEU.n600, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{streak > 0 ? `${streak}d` : "—"}</span>
+                {days.map((d) => {
+                  const on = liveOn(h, d.key);
+                  if (d.future || !on) return <div key={d.key} style={{ width: HABIT_COL, height: 34, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><span style={{ width: 4, height: 4, borderRadius: 2, background: NEU.n800 }} /></div>;
+                  const st = habitState(h, d.key);
+                  return (
+                    <button key={d.key} onClick={() => cycle(h.id, d.key)}
+                      aria-label={`${h.name}, ${WD_LONG[d.dow]} ${d.dt.getDate()} ${MON[d.dt.getMonth()]} — ${habitStateLabel(st) || "not marked"}, tap to change`}
+                      style={{ width: HABIT_COL, height: 34, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: "none", border: "none", padding: 0, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                      <HabitDot state={st} />
+                    </button>
+                  );
+                })}
               </div>
             );
           })}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, paddingTop: 12, marginTop: 2, borderTop: `1px solid ${C.lineSoft}`, paddingBottom: 12 }}>
-            {[[C.green, HABIT_LABEL[HABIT_GREEN]], [C.amber, HABIT_LABEL[HABIT_ORANGE]], [C.red, HABIT_LABEL[HABIT_RED]]].map(([c, t]) => (
-              <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: SANS, fontSize: 11, color: NEU.n600 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 4, background: c }} />{t}
-              </span>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, paddingTop: 11, marginTop: 2, borderTop: `1px solid ${C.lineSoft}`, paddingBottom: 12 }}>
+            {[[HABIT_GREEN, HABIT_LABEL[HABIT_GREEN]], [HABIT_ORANGE, HABIT_LABEL[HABIT_ORANGE]], [HABIT_RED, HABIT_LABEL[HABIT_RED]]].map(([st, t]) => (
+              <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: SANS, fontSize: 11, color: NEU.n600 }}><HabitDot state={st} size={12} />{t}</span>
             ))}
-            <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, width: "100%" }}>Tap a circle to cycle. Not able leaves the day out of your score entirely — it was never a fair test.</span>
+            <span style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, width: "100%", lineHeight: 1.5 }}>Tap any day to cycle it. Not able leaves that day out of your score entirely — it was never a fair test.</span>
           </div>
         </Card>
       )}
@@ -3142,10 +3260,10 @@ function Habits({ habits, setHabits, friendsApi }) {
             <button onClick={() => setSheet("month")} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: SANS, fontSize: 11, color: ACC, WebkitTapHighlightColor: "transparent" }}>History</button>
           </div>
         </div>
-        <Card style={{ padding: 14 }}>
-          {/* Tapping a square jumps the checklist above to that day, which is the quickest
-              route to a day you forgot. */}
-          <HeatGrid habits={habits} weeks={3} selKey={selKey} onPickDay={setSelKey} />
+        <Card style={{ padding: 14, marginBottom: 18 }}>
+          {/* Tapping a square takes the grid above to that week, which is the quickest route
+              back to a day you forgot. */}
+          <HeatGrid habits={habits} weeks={3} selKey={ymd(weekStart)} onPickDay={(k) => setWkOffset(Math.round((mondayOf(new Date(k)).getTime() - mondayOf(new Date()).getTime()) / (7 * DAYMS)))} />
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}` }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 500, color: ahead == null ? C.sub : ahead >= 0 ? AC.a300 : C.sub }}>
@@ -3163,36 +3281,77 @@ function Habits({ habits, setHabits, friendsApi }) {
         </Card>
       </>)}
 
-      {/* Ranked on the shared percentage only. Nobody's habit names or daily record travel. */}
-      {friendsApi?.friends?.length > 0 && (() => {
-        const mine = habits.filter((h) => h.visibleToFriends);
-        const myPct = mine.length ? (habitMonthStats(mine, new Date()).pct ?? 0) : null;
-        const rows = [
-          ...friendsApi.friends.filter((f) => f.stats).map((f) => ({ id: f.userId, name: f.name, pct: f.stats.habit_pct ?? 0 })),
-          ...(myPct != null ? [{ id: "me", name: "You", pct: myPct, me: true }] : []),
-        ].sort((a, b) => b.pct - a.pct);
-        if (!rows.length) return null;
-        return (<>
-          <SectionLabel>Friends · habits hit this month</SectionLabel>
-          <Card style={{ padding: "6px 14px 10px", marginTop: 8 }}>
-            {rows.map((r, i) => (
-              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 8px", margin: "2px -8px", borderRadius: 8, background: r.me ? AC.a900 : "transparent" }}>
-                <span style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, width: 14, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{i + 1}</span>
-                <span style={{ fontFamily: SANS, fontSize: 13, color: C.ink, width: 62, flexShrink: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</span>
-                <div style={{ flex: 1, height: 4, borderRadius: 2, background: NEU.n900, overflow: "hidden" }}>
-                  <div style={{ width: `${Math.max(0, Math.min(100, r.pct))}%`, height: "100%", background: r.me ? AC.base : NEU.n700 }} />
-                </div>
-                <span style={{ fontFamily: SANS, fontSize: 12.5, color: r.me ? AC.a300 : NEU.n600, fontWeight: r.me ? 500 : 400, width: 34, textAlign: "right", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{r.pct}%</span>
-              </div>
-            ))}
-            {mine.length === 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, padding: "8px 0 2px", lineHeight: 1.5 }}>None of your habits are shared yet. Open one and turn on "Visible to friends" to appear here.</div>}
-          </Card>
-        </>);
-      })()}
+      {/* FRIENDS — the same week, for the habits they chose to show you.
+          This replaced a single ranked percentage, which told you somebody was on 64% and
+          gave you nothing to say to them about it. What is here is what HabitShare shows:
+          the habit by name, its run, and the days themselves. It is all opt-in per person,
+          and the rows a friend has not shared with you were never written, so there is
+          nothing here that a filter is holding back. */}
+      {myFriends.length > 0 && (<>
+        <SectionLabel icon={<UsersThree size={12} />}>Friends</SectionLabel>
+        {(() => {
+          const me = friendsApi?.user?.id;
+          const horizon = habitShareHorizon();
+          const fivesIn = (friendsApi?.highFives || []).filter((x) => x.to_id === me && ymd(new Date(x.created_at)) === todayKey);
+          const nameOf = (id) => (myFriends.find((f) => f.userId === id) || {}).name || "A friend";
+          return (<>
+            {fivesIn.length > 0 && (
+              <Card style={{ padding: "12px 14px", marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}>
+                <HandsClapping size={19} weight="fill" color={AC.a300} />
+                <span style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink, lineHeight: 1.45 }}>
+                  {[...new Set(fivesIn.map((x) => nameOf(x.from_id)))].join(" and ")} high fived you today.
+                </span>
+              </Card>
+            )}
+            {myFriends.map((f) => {
+              const theirs = (friendsApi?.friendHabits || []).filter((r) => r.owner_id === f.userId);
+              const fived = (friendsApi?.highFives || []).some((x) => x.from_id === me && x.to_id === f.userId && ymd(new Date(x.created_at)) === todayKey);
+              const back = myFriends.length ? (Array.isArray(habits) ? habits : []).filter((h) => habitSharedWith(h, f.userId)).length : 0;
+              return (
+                <Card key={f.userId} style={{ padding: "12px 13px 4px", marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 10 }}>
+                    <div style={{ width: 30, height: 30, flexShrink: 0, borderRadius: 15, border: `1px solid ${AC.a800}`, background: AC.a900, color: NEU.n200, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS, fontSize: 12 }}>{(f.name || "?").trim().charAt(0).toUpperCase()}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 500, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</div>
+                      <div style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, marginTop: 2 }}>{theirs.length ? `shares ${theirs.length} with you` : "shares nothing yet"} · you share {back}</div>
+                    </div>
+                    <button onClick={() => !fived && friendsApi.sendFive(f.userId, null)} disabled={fived}
+                      aria-label={fived ? `Already high fived ${f.name} today` : `High five ${f.name}`}
+                      style={{ display: "flex", alignItems: "center", gap: 5, height: 32, padding: "0 11px", flexShrink: 0, borderRadius: 8, border: `1px solid ${fived ? C.line : AC.base}`, background: "none", color: fived ? NEU.n600 : ACC, fontFamily: SANS, fontSize: 12.5, fontWeight: 500, cursor: fived ? "default" : "pointer", WebkitTapHighlightColor: "transparent" }}>
+                      <HandsClapping size={15} weight={fived ? "fill" : "regular"} /> {fived ? "Sent" : "High five"}
+                    </button>
+                  </div>
+                  {theirs.length === 0 ? (
+                    <div style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, padding: "0 0 12px", lineHeight: 1.5 }}>
+                      Nothing shared with you yet. They choose this habit by habit, the same way you do.
+                    </div>
+                  ) : theirs.map((r) => (
+                    <div key={r.local_id} style={{ display: "flex", alignItems: "center", borderTop: `1px solid ${C.lineSoft}`, padding: "7px 0" }}>
+                      <div style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
+                        <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</div>
+                        <div style={{ fontFamily: SANS, fontSize: 11, color: r.streak > 0 ? AC.a300 : NEU.n600, marginTop: 2 }}>{r.streak > 0 ? `${r.streak} day run` : "No run yet"}</div>
+                      </div>
+                      {days.map((d) => {
+                        // Only four weeks travel, so an older week is "not known", not "not done".
+                        const known = d.key >= horizon && !d.future;
+                        if (!known) return <div key={d.key} style={{ width: HABIT_COL, height: 30, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><span style={{ width: 4, height: 4, borderRadius: 2, background: NEU.n800 }} /></div>;
+                        return <div key={d.key} style={{ width: HABIT_COL, height: 30, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><HabitDot state={(r.days || {})[d.key] || null} size={17} /></div>;
+                      })}
+                    </div>
+                  ))}
+                </Card>
+              );
+            })}
+            <div style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, margin: "2px 2px 16px", lineHeight: 1.5 }}>
+              Friends only ever see habits you switch on for them, one person at a time. Your training, your weight and your finances are not shared with anyone, by any setting.
+            </div>
+          </>);
+        })()}
+      </>)}
 
       {sheet === "month" && <MonthHistorySheet habits={habits} onClose={() => setSheet(null)} />}
       {sheet && sheet !== "month" && (
-        <HabitSheet habit={sheet.habit}
+        <HabitSheet habit={sheet.habit} friendsApi={friendsApi}
           onSave={(patch) => { save(sheet.habit.id, patch); setSheet(null); }}
           onDelete={() => { remove(sheet.habit.id); setSheet(null); }}
           onClose={() => setSheet(null)} />
@@ -3736,7 +3895,7 @@ export default function App() {
   const [read, setRead] = usePersist("wa_read", READ_DEFAULT);
   const [fin, setFin] = usePersist("wa_finance", FIN_DEFAULT);
   // after the state it reads, or it would touch these bindings before they exist
-  const friendsApi = useFriends(sync, habits, read, profile);
+  const friendsApi = useFriends(sync, habits, setHabits, read, profile);
   const [tab, setTab] = useState("today");
   const [settingsOpen, setSettingsOpen] = useState(false);
   // one-time cleanup: drop the old auto-seeded p1/p2/p3 defaults if they were never actually started
@@ -3775,7 +3934,7 @@ export default function App() {
             </button>); })}
         </div>
       </div>
-      {settingsOpen && <SettingsSheet profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} equipment={equipment} setEquipment={setEquipment} fin={fin} setFin={setFin} sync={sync} friendsApi={friendsApi} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsSheet profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} equipment={equipment} setEquipment={setEquipment} fin={fin} setFin={setFin} sync={sync} friendsApi={friendsApi} habits={habits} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
