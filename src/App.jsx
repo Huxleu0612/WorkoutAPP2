@@ -465,6 +465,20 @@ const sessionsFor = (h, pid) => h.filter((x) => x.programId === pid);
 //
 // history is appended in order, hence the backwards walk. Today's own session is skipped:
 // what you are lifting right now is not what you lifted last time.
+// Sets grouped by exercise, IN THE ORDER THEY WERE DONE. Keying an object by exercise id
+// does not do this: ids like "1436" are canonical integer indices and JavaScript hoists
+// those ahead of every string key, so a session logged bench-then-squat came back
+// squat-then-bench. Ids with a leading zero ("0025") are not indices and stay put, which is
+// why only some sessions looked wrong.
+const setsByExercise = (sets) => {
+  const out = [];
+  (sets || []).forEach((x) => {
+    let g = out.find((y) => y.id === x.exId);
+    if (!g) out.push(g = { id: x.exId, sets: [] });
+    g.sets.push(x);
+  });
+  return out;
+};
 const lastSetsFor = (history, exId, { exceptDate, programId, dayIdx, rowCount } = {}) => {
   let shapeHit = null, anyHit = null;
   for (let i = history.length - 1; i >= 0; i--) {
@@ -1243,7 +1257,7 @@ function StatsView({ sessions, unit, title, sub, onBack }) {
 /* ================================================================
    DASHBOARD
 ================================================================ */
-function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits, setHabits, read, go, onSettings }) {
+function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits, setHabits, read, go, onSettings, onHistory }) {
   const [view, setView] = useState("main");
   const [wkOffset, setWkOffset] = useState(0);
   const [selKey, setSelKey] = useState(ymd(new Date()));
@@ -1337,6 +1351,9 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
           <Eyebrow>{wkOffset === 0 ? "This week" : `${weekStart.getDate()} ${MON[weekStart.getMonth()]} – ${addDays(weekStart, 6).getDate()} ${MON[addDays(weekStart, 6).getMonth()]}`}</Eyebrow>
           <button onClick={() => setWkOffset(Math.min(0, wkOffset + 1))} aria-label="Next week" disabled={wkOffset >= 0} style={{ background: "none", border: "none", cursor: wkOffset < 0 ? "pointer" : "default", padding: 2, display: "flex", WebkitTapHighlightColor: "transparent" }}><ChevronRight size={15} color={wkOffset < 0 ? C.faint : "transparent"} /></button>
         </div>
+        {/* Stepping back a week at a time is fine for last Tuesday and useless for March.
+            This is the way to an arbitrary day. */}
+        <button onClick={onHistory} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: SANS, fontSize: 11, color: ACC, WebkitTapHighlightColor: "transparent" }}><Calendar size={12} /> History</button>
       </div>
       <Card style={{ padding: 11, marginBottom: 16, boxShadow: C.shadowSm }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6 }}>
@@ -1398,18 +1415,17 @@ function Dashboard({ profile, weightLog, setWeightLog, programs, history, habits
       {/* TODAY'S WORKOUT */}
       {(() => {
         if (selSession) {
-          const byEx = {};
-          (selSession.sets || []).forEach((x) => { (byEx[x.exId] = byEx[x.exId] || []).push(x); });
+          const byEx = setsByExercise(selSession.sets);
           return (
             <Card style={{ padding: 18, marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
                 <div><div style={{ fontFamily: SANS, fontSize: 11, fontWeight: 500, color: C.green }}>{selDay.isToday ? "Completed today" : "Completed"}</div><div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, marginTop: 4, letterSpacing: -0.3 }}>{selSession.dayName}</div></div>
                 <div style={{ width: 40, height: 40, borderRadius: 8, background: C.greenBg, display: "flex", alignItems: "center", justifyContent: "center" }}><Check size={20} color={C.green} /></div>
               </div>
-              {Object.entries(byEx).map(([id, ss]) => (
+              {byEx.map(({ id, sets }) => (
                 <div key={id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 0", borderTop: `1px solid ${C.lineSoft}` }}>
                   <span style={{ fontFamily: SANS, fontSize: 14, color: C.ink }}>{exName(id)}</span>
-                  <span style={{ fontFamily: MONO, fontSize: 12.5, color: C.sub }}>{ss.map((x) => x.w > 0 ? `${wStr(x.w, u)}×${x.reps}` : `${x.reps}`).join("  ")}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 12.5, color: C.sub }}>{sets.map((x) => x.w > 0 ? `${wStr(x.w, u)}×${x.reps}` : `${x.reps}`).join("  ")}</span>
                 </div>
               ))}
             </Card>
@@ -3124,37 +3140,172 @@ function HabitSheet({ habit, friendsApi, onSave, onDelete, onClose }) {
   );
 }
 
-function MonthHistorySheet({ habits, onClose }) {
+/* Everything that happened on one day, in one place.
+   Each pillar already stores itself by date key — history by `date`, habits by `ticks[key]`,
+   reading by `log[key]`, weight by `weightLog[key]` — so this reads the same four stores
+   rather than introducing any record of its own. Finance is absent because it genuinely has
+   no per-day shape: it is quarterly check-ins, and inventing a daily figure for it would be
+   making something up. */
+function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, onStep, onClose }) {
+  const dt = startOfDay(new Date(dateKey));
+  const today0 = startOfDay(new Date());
+  const isToday = sameDay(dt, today0);
+  const u = unit || "kg";
+  const session = history.find((h) => h.date === dateKey) || null;
+  const prog = session ? (programs || []).find((x) => x.id === session.programId) : null;
+
+  // Only claim a session was missed when the program that scheduled it had actually started
+  // by then, otherwise every day before you began reads as a failure.
+  const active = activeProgram(programs);
+  const startedAt0 = active?.startedAt ? startOfDay(new Date(active.startedAt)) : null;
+  const aidx = active && !isPaused(active) ? assignedIdx(active, dt) : null;
+  const missed = !session && aidx != null && dt < today0 && startedAt0 && dt >= startedAt0;
+
+  const dayHabits = habitsOn(habits, dateKey);
+  const mins = readMin(read, dateKey);
+  const goalMin = read?.goalMin || 20;
+  const kg = weightLog?.[dateKey];
+  const pct = habitDayPct(habits, dateKey);
+
+  const byEx = setsByExercise(session?.sets);
+  const vol = (session?.sets || []).reduce((n, x) => n + (x.w || 0) * (x.reps || 0), 0);
+
+  const nothing = !session && !missed && !dayHabits.length && !mins && kg == null;
+  const label = { fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, margin: "16px 0 8px" };
+  const line = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "9px 0", borderTop: `1px solid ${C.lineSoft}` };
+
+  return (
+    <div onClick={onClose} style={{ ...sheetScrim, zIndex: 70 }}>
+      <div onClick={(e) => e.stopPropagation()} style={sheetShell}>
+        <div style={grabHandle} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <button onClick={() => onStep(-1)} style={miniRound} aria-label="Previous day"><ChevronLeft size={17} /></button>
+          <div style={{ textAlign: "center", minWidth: 0 }}>
+            <div style={{ fontFamily: SANS, fontSize: 18, fontWeight: 500, color: C.ink, letterSpacing: -0.3, whiteSpace: "nowrap" }}>
+              {isToday ? "Today" : `${WD_LONG[dt.getDay()]} ${dt.getDate()} ${MON[dt.getMonth()]}`}
+            </div>
+            <div style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, marginTop: 2 }}>
+              {isToday ? `${dt.getDate()} ${MON[dt.getMonth()]} ${dt.getFullYear()}` : dt.getFullYear()}
+            </div>
+          </div>
+          <button onClick={() => !isToday && onStep(1)} disabled={isToday} style={{ ...miniRound, opacity: isToday ? 0.35 : 1, cursor: isToday ? "default" : "pointer" }} aria-label="Next day"><ChevronRight size={17} /></button>
+        </div>
+
+        {nothing ? (
+          <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, textAlign: "center", padding: "28px 10px 10px", lineHeight: 1.55 }}>
+            Nothing recorded on this day.
+          </div>
+        ) : (<>
+          <div style={label}>Training</div>
+          {session ? (<>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+              <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink }}>{session.dayName}{prog ? ` · ${prog.name}` : ""}</span>
+              <span style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{(session.sets || []).length} sets · {kFmt(fmtW(vol, u))} {u}</span>
+            </div>
+            {byEx.map(({ id, sets }) => (
+              <div key={id} style={{ ...line, alignItems: "flex-start" }}>
+                <span style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink, minWidth: 0 }}>{exName(id)}</span>
+                <span style={{ fontFamily: MONO, fontSize: 12, color: C.sub, textAlign: "right", flexShrink: 0 }}>{sets.map((x) => x.w > 0 ? `${wStr(x.w, u)}×${x.reps}` : `${x.reps}`).join("  ")}</span>
+              </div>
+            ))}
+          </>) : (
+            <div style={{ fontFamily: SANS, fontSize: 13.5, color: missed ? C.amber : C.sub, lineHeight: 1.5 }}>
+              {missed ? `${wLabel(aidx)} was scheduled and never logged.` : "No workout logged."}
+            </div>
+          )}
+
+          {dayHabits.length > 0 && (<>
+            <div style={label}>Habits{pct != null ? ` · ${pct}%` : ""}</div>
+            {dayHabits.map((h) => {
+              const st = habitState(h, dateKey);
+              return (
+                <div key={h.id} style={line}>
+                  <span style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.name}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                    <span style={{ fontFamily: SANS, fontSize: 12, color: st ? habitStateColor(st) : NEU.n600 }}>{habitStateLabel(st) || "Not marked"}</span>
+                    <HabitDot state={st} size={16} />
+                  </span>
+                </div>
+              );
+            })}
+          </>)}
+
+          <div style={label}>Reading and weight</div>
+          <div style={line}>
+            <span style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink }}>Reading</span>
+            <span style={{ fontFamily: SANS, fontSize: 12.5, color: mins >= goalMin ? C.green : mins > 0 ? C.ink : NEU.n600, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{mins > 0 ? `${hm(mins)} of ${goalMin}m` : "Nothing logged"}</span>
+          </div>
+          <div style={line}>
+            <span style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink }}>Weigh-in</span>
+            <span style={{ fontFamily: SANS, fontSize: 12.5, color: kg != null ? C.ink : NEU.n600, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{kg != null ? `${wStr(kg, u)} ${u}` : "Nothing logged"}</span>
+          </div>
+        </>)}
+
+        <button onClick={onClose} style={{ width: "100%", height: 44, marginTop: 20, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 14.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Close</button>
+      </div>
+    </div>
+  );
+}
+
+/* The way back to any particular day. Pages back without limit — the month arrows are the
+   only navigation, so a day eight months ago costs eight taps and nothing else. Every past
+   square opens, including empty ones, because "did I do anything that Tuesday" is a real
+   question and a dead square is a real answer. */
+function HistorySheet({ habits, history, read, weightLog, programs, unit, onClose }) {
   const [back, setBack] = useState(0);
+  const [day, setDay] = useState(null);
   const now = new Date();
+  const today0 = startOfDay(now);
   const m = new Date(now.getFullYear(), now.getMonth() - back, 1);
   const stats = habitMonthStats(habits, m);
-  const prev = habitMonthStats(habits, new Date(m.getFullYear(), m.getMonth() - 1, 1));
   const first = new Date(m.getFullYear(), m.getMonth(), 1);
+  const nextM = new Date(m.getFullYear(), m.getMonth() + 1, 1);
   const lead = (first.getDay() + 6) % 7; // grid starts Monday
   const dim = new Date(m.getFullYear(), m.getMonth() + 1, 0).getDate();
-  const today0 = startOfDay(now);
+  const trained = new Set(history.filter((h) => { const d = startOfDay(new Date(h.date)); return d >= first && d < nextM; }).map((h) => h.date));
   const tile = { flex: 1, background: C.page, borderRadius: 8, padding: "11px 12px" };
+  const stepDay = (n) => { const d = addDays(startOfDay(new Date(day)), n); if (startOfDay(d) > today0) return; setDay(ymd(d)); };
+
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: C.scrim, zIndex: 60, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "14px 14px 0 0", boxShadow: C.shadowLg, padding: "18px 17px 26px", maxHeight: "86vh", overflowY: "auto" }}>
-        <div style={{ width: 36, height: 3, borderRadius: 2, background: C.line, margin: "0 auto 18px" }} />
+    <div onClick={onClose} style={sheetScrim}>
+      <div onClick={(e) => e.stopPropagation()} style={sheetShell}>
+        <div style={grabHandle} />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
           <button onClick={() => setBack(back + 1)} style={miniRound} aria-label="Previous month"><ChevronLeft size={17} /></button>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontFamily: SANS, fontSize: 18, fontWeight: 500, color: C.ink, letterSpacing: -0.3 }}>{MON_LONG[m.getMonth()]} {m.getFullYear()}</div>
-            <div style={{ fontFamily: SANS, fontSize: 12.5, color: stats.pct == null ? NEU.n600 : AC.a300, marginTop: 2 }}>{stats.pct == null ? "Nothing tracked yet" : `${stats.pct}% of habits hit`}</div>
+            <div style={{ fontFamily: SANS, fontSize: 12.5, color: NEU.n600, marginTop: 2 }}>
+              {trained.size ? `${trained.size} workout${trained.size === 1 ? "" : "s"}` : "No workouts"}{stats.pct != null ? ` · ${stats.pct}% of habits hit` : ""}
+            </div>
           </div>
           <button onClick={() => setBack(Math.max(0, back - 1))} style={miniRound} aria-label="Next month"><ChevronRight size={17} color={back > 0 ? C.ink : C.faint} /></button>
         </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 8px" }}><HeatLegend /></div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 5, marginBottom: 16 }}>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "14px 0 8px" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: SANS, fontSize: 10, color: NEU.n600 }}><span style={{ width: 5, height: 5, borderRadius: 3, background: C.green }} />trained</span>
+          <HeatLegend />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 5, marginBottom: 8 }}>
+          {WD_LETTER.slice(1).concat(WD_LETTER[0]).map((d, i) => <div key={i} style={{ textAlign: "center", fontFamily: SANS, fontSize: 9.5, fontWeight: 500, color: NEU.n600 }}>{d}</div>)}
           {Array.from({ length: lead }).map((_, i) => <div key={`l${i}`} />)}
           {Array.from({ length: dim }).map((_, i) => {
             const dt = new Date(m.getFullYear(), m.getMonth(), i + 1), key = ymd(dt), future = startOfDay(dt) > today0;
-            return <div key={key} style={{ aspectRatio: "1", borderRadius: 3, background: future ? "transparent" : heatColor(habitDayPct(habits, key)), border: future ? `1px solid ${NEU.n900}` : "none", outline: sameDay(dt, now) ? `1px solid ${AC.a300}` : "none", outlineOffset: 1 }} />;
+            return (
+              <button key={key} disabled={future} onClick={() => setDay(key)}
+                aria-label={`${dt.getDate()} ${MON[dt.getMonth()]}${future ? "" : " — open this day"}`}
+                style={{ position: "relative", aspectRatio: "1", borderRadius: 4, padding: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                  background: future ? "transparent" : heatColor(habitDayPct(habits, key)),
+                  border: future ? `1px solid ${NEU.n900}` : "none",
+                  outline: sameDay(dt, now) ? `1px solid ${AC.a300}` : "none", outlineOffset: 1,
+                  cursor: future ? "default" : "pointer", WebkitTapHighlightColor: "transparent" }}>
+                <span style={{ fontFamily: SANS, fontSize: 11, color: future ? NEU.n800 : C.ink, fontVariantNumeric: "tabular-nums" }}>{dt.getDate()}</span>
+                {trained.has(key) && <span style={{ position: "absolute", bottom: 3, width: 4, height: 4, borderRadius: 2, background: C.green }} />}
+              </button>
+            );
           })}
         </div>
+        <div style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, marginBottom: 14, lineHeight: 1.5 }}>Tap any day to see what happened — the session you logged, how the habits went, what you read and what you weighed.</div>
+
         <div style={{ display: "flex", gap: 8 }}>
           {[{ k: "Best run", v: `${habitBestRun(habits)}d` }, { k: "Perfect days", v: String(stats.perfect) }, { k: "Missed", v: String(stats.missed) }].map((t) => (
             <div key={t.k} style={tile}>
@@ -3163,8 +3314,8 @@ function MonthHistorySheet({ habits, onClose }) {
             </div>
           ))}
         </div>
-        {prev.pct != null && stats.pct != null && <div style={{ fontFamily: SANS, fontSize: 12.5, color: NEU.n600, marginTop: 14, textAlign: "center" }}>Last month was {prev.pct}%.</div>}
       </div>
+      {day && <DaySheet dateKey={day} habits={habits} history={history} read={read} weightLog={weightLog} programs={programs} unit={unit} onStep={stepDay} onClose={() => setDay(null)} />}
     </div>
   );
 }
@@ -3180,8 +3331,8 @@ function HabitDot({ state, size = 21 }) {
 
 const HABIT_COL = 27; // width of one day column in the week grid
 
-function Habits({ habits, setHabits, friendsApi }) {
-  const [sheet, setSheet] = useState(null); // {habit} | "month"
+function Habits({ habits, setHabits, friendsApi, onHistory }) {
+  const [sheet, setSheet] = useState(null); // {habit}
   const [wkOffset, setWkOffset] = useState(0);
   const todayKey = ymd(new Date());
   const today0 = startOfDay(new Date());
@@ -3291,7 +3442,7 @@ function Habits({ habits, setHabits, friendsApi }) {
           <Eyebrow>Last 3 weeks</Eyebrow>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <HeatLegend />
-            <button onClick={() => setSheet("month")} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: SANS, fontSize: 11, color: ACC, WebkitTapHighlightColor: "transparent" }}>History</button>
+            <button onClick={onHistory} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: SANS, fontSize: 11, color: ACC, WebkitTapHighlightColor: "transparent" }}>History</button>
           </div>
         </div>
         <Card style={{ padding: 14, marginBottom: 18 }}>
@@ -3383,8 +3534,7 @@ function Habits({ habits, setHabits, friendsApi }) {
         })()}
       </>)}
 
-      {sheet === "month" && <MonthHistorySheet habits={habits} onClose={() => setSheet(null)} />}
-      {sheet && sheet !== "month" && (
+      {sheet && (
         <HabitSheet habit={sheet.habit} friendsApi={friendsApi}
           onSave={(patch) => { save(sheet.habit.id, patch); setSheet(null); }}
           onDelete={() => { remove(sheet.habit.id); setSheet(null); }}
@@ -3932,6 +4082,7 @@ export default function App() {
   const friendsApi = useFriends(sync, habits, setHabits, read, profile);
   const [tab, setTab] = useState("today");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   // one-time cleanup: drop the old auto-seeded p1/p2/p3 defaults if they were never actually started
   useEffect(() => { setPrograms((ps) => ps.filter((p) => !(["p1", "p2", "p3"].includes(p.id) && !p.startedAt && !p.completedAt))); }, []);
 
@@ -3950,11 +4101,11 @@ export default function App() {
         {updateReady && <UpdateBar onReload={() => window.location.reload()} />}
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
           {pillar?.locked && <LockedScreen label={pillar.label} Icon={pillar.Icon} blurb={pillar.blurb} />}
-          {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} habits={habits} setHabits={setHabits} read={read} go={setTab} onSettings={openSettings} />}
+          {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} habits={habits} setHabits={setHabits} read={read} go={setTab} onSettings={openSettings} onHistory={() => setHistoryOpen(true)} />}
           {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} onReorderSchedule={reorderSchedule} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
           {tab === "read" && <Read read={read} setRead={setRead} friendsApi={friendsApi} />}
           {tab === "finance" && <Finance fin={fin} setFin={setFin} onSettings={openSettings} />}
-          {tab === "habits" && <Habits habits={habits} setHabits={setHabits} friendsApi={friendsApi} />}
+          {tab === "habits" && <Habits habits={habits} setHabits={setHabits} friendsApi={friendsApi} onHistory={() => setHistoryOpen(true)} />}
           {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} go={setTab} />}
         </div>
         <div style={{ flexShrink: 0, background: "rgba(22,24,38,0.92)", backdropFilter: "blur(12px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "8px 8px max(22px, env(safe-area-inset-bottom))" }}>
@@ -3968,6 +4119,7 @@ export default function App() {
             </button>); })}
         </div>
       </div>
+      {historyOpen && <HistorySheet habits={habits} history={history} read={read} weightLog={weightLog} programs={programs} unit={profile.unit} onClose={() => setHistoryOpen(false)} />}
       {settingsOpen && <SettingsSheet profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} equipment={equipment} setEquipment={setEquipment} fin={fin} setFin={setFin} sync={sync} friendsApi={friendsApi} habits={habits} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
