@@ -451,14 +451,41 @@ const sessionsFor = (h, pid) => h.filter((x) => x.programId === pid);
 // twice. The real per-set record is in history, so read it from there. history is appended
 // in order, hence the backwards walk. Today's own draft is skipped: what you are lifting
 // right now is not what you lifted last time.
-const lastSetsFor = (history, exId, exceptDate) => {
+// The last time you did this exercise IN THIS SLOT, set by set. The slot matters: on GZCLP
+// the bench is 5x3 as a T1 on one day and 3x10 as a T2 on another, so "the last session
+// containing bench" hands you whichever came last and lines 10 actual reps up against a
+// 3-rep target. Matching on the program and day index instead means the tier, and therefore
+// the rep scheme, is the same by construction.
+//
+// Failing that — the exercise was only just added, or the day was reordered — it settles for
+// a session with the same number of sets, which is the only structural signal history keeps
+// (targets are not stored, only what was done). Failing even that it still reports the last
+// time you touched the lift, but marks it `other` so the caller shows it as a sentence
+// rather than pretending the numbers line up row for row.
+//
+// history is appended in order, hence the backwards walk. Today's own session is skipped:
+// what you are lifting right now is not what you lifted last time.
+const lastSetsFor = (history, exId, { exceptDate, programId, dayIdx, rowCount } = {}) => {
+  let shapeHit = null, anyHit = null;
   for (let i = history.length - 1; i >= 0; i--) {
     const h = history[i];
     if (exceptDate && h.date === exceptDate) continue;
     const mine = (h.sets || []).filter((x) => x.exId === exId);
-    if (mine.length) return { date: h.date, sets: mine };
+    if (!mine.length) continue;
+    if (programId != null && h.programId === programId && h.dayIdx === dayIdx) return { date: h.date, sets: mine, match: "slot" };
+    if (!shapeHit && rowCount && mine.length === rowCount) shapeHit = { date: h.date, sets: mine, match: "shape" };
+    if (!anyHit) anyHit = { date: h.date, sets: mine, match: "other" };
   }
-  return null;
+  return shapeHit || anyHit;
+};
+// "3 sets of 10", or just "3 sets" when they were not all the same.
+const setsSummary = (sets, u) => {
+  const reps = sets.map((x) => x.reps);
+  const same = reps.every((r) => r === reps[0]);
+  const w = sets[0]?.w || 0;
+  const allSameW = sets.every((x) => (x.w || 0) === w);
+  if (!same) return `${sets.length} set${sets.length === 1 ? "" : "s"}`;
+  return `${sets.length}×${reps[0]}${w > 0 && allSameW ? ` at ${wStr(w, u)} ${u}` : ""}`;
 };
 // one source of truth for "how much work is in these sessions" — shared by StatsView and Train
 const volumeAndSets = (sessions) => {
@@ -1960,8 +1987,11 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
         const Arrow = rec.dir === "up" ? ArrowUp : rec.dir === "down" ? ArrowDown : ArrowRight;
         const dirColor = rec.dir === "up" ? C.green : rec.dir === "down" ? C.red : C.sub;
         const bw = isBW(exx.id);
-        const lastLog = lastSetsFor(history, exx.id, live.dateKey);
-        const lastTxt = (i) => { const x = lastLog?.sets[i]; return x ? (x.w > 0 ? `${wStr(x.w, u)}×${x.reps}` : `${x.reps}`) : null; };
+        const lastLog = lastSetsFor(history, exx.id, { exceptDate: live.dateKey, programId: active.id, dayIdx: live.dayIdx, rowCount: rows.length });
+        // Only line numbers up against the target when they are actually comparable.
+        const lastComparable = lastLog && lastLog.match !== "other";
+        const lastTxt = (i) => { if (!lastComparable) return null; const x = lastLog.sets[i]; return x ? (x.w > 0 ? `${wStr(x.w, u)}×${x.reps}` : `${x.reps}`) : null; };
+        const lastDateStr = lastLog ? `${WD_LONG[new Date(lastLog.date).getDay()].slice(0, 3)} ${new Date(lastLog.date).getDate()} ${MON[new Date(lastLog.date).getMonth()]}` : null;
         const th = { flex: 1, fontFamily: MONO, fontSize: 10, letterSpacing: .8, color: C.faint, textAlign: "center" };
 
         // completed / current / upcoming — only the current exercise stays expanded
@@ -2006,11 +2036,13 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
                 be inferred from a number sitting on screen. */}
             {(specs || []).some((s) => s?.kind === "amrap") && (
               <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, lineHeight: 1.45, margin: "-4px 2px 11px" }}>
-                On the AMRAP set, stop with 1–2 reps still in the tank{lastLog ? ` — last time you got ${lastLog.sets[lastLog.sets.length - 1].reps}` : ""}.
+                On the AMRAP set, stop with 1–2 reps still in the tank{lastComparable ? ` — last time you got ${lastLog.sets[lastLog.sets.length - 1].reps}` : ""}.
               </div>
             )}
-            <div style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, margin: "0 2px 7px" }}>
-              {lastLog ? `Last time · ${WD_LONG[new Date(lastLog.date).getDay()].slice(0, 3)} ${new Date(lastLog.date).getDate()} ${MON[new Date(lastLog.date).getMonth()]}` : "No previous record for this exercise yet."}
+            <div style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, margin: "0 2px 7px", lineHeight: 1.45 }}>
+              {!lastLog ? "No previous record for this exercise yet."
+                : lastComparable ? `Last time here · ${lastDateStr}${lastLog.match === "shape" ? " · closest matching session" : ""}`
+                : `First time doing this in this slot. You last did it ${lastDateStr} as ${setsSummary(lastLog.sets, u)}, which is a different set-up.`}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 7px" }}>
               <div style={{ width: 26, fontFamily: MONO, fontSize: 10, letterSpacing: .8, color: C.faint, textAlign: "left" }}>SET</div>
