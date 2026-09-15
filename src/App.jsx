@@ -3151,15 +3151,18 @@ function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, o
   const today0 = startOfDay(new Date());
   const isToday = sameDay(dt, today0);
   const u = unit || "kg";
-  const session = history.find((h) => h.date === dateKey) || null;
-  const prog = session ? (programs || []).find((x) => x.id === session.programId) : null;
+  // Every session on the day, not the first one. Nothing stops two being logged — a second
+  // session on a rest day, or a day where two programs overlap — and a history view that
+  // silently drops one is worse than no history view.
+  const sessions = history.filter((h) => h.date === dateKey);
+  const progName = (id) => ((programs || []).find((x) => x.id === id) || {}).name;
 
   // Only claim a session was missed when the program that scheduled it had actually started
   // by then, otherwise every day before you began reads as a failure.
   const active = activeProgram(programs);
   const startedAt0 = active?.startedAt ? startOfDay(new Date(active.startedAt)) : null;
   const aidx = active && !isPaused(active) ? assignedIdx(active, dt) : null;
-  const missed = !session && aidx != null && dt < today0 && startedAt0 && dt >= startedAt0;
+  const missed = !history.some((h) => h.date === dateKey) && aidx != null && dt < today0 && startedAt0 && dt >= startedAt0;
 
   const dayHabits = habitsOn(habits, dateKey);
   const mins = readMin(read, dateKey);
@@ -3167,10 +3170,7 @@ function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, o
   const kg = weightLog?.[dateKey];
   const pct = habitDayPct(habits, dateKey);
 
-  const byEx = setsByExercise(session?.sets);
-  const vol = (session?.sets || []).reduce((n, x) => n + (x.w || 0) * (x.reps || 0), 0);
-
-  const nothing = !session && !missed && !dayHabits.length && !mins && kg == null;
+  const nothing = !sessions.length && !missed && !dayHabits.length && !mins && kg == null;
   const label = { fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, margin: "16px 0 8px" };
   const line = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "9px 0", borderTop: `1px solid ${C.lineSoft}` };
 
@@ -3200,19 +3200,25 @@ function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, o
             Nothing recorded on this day.
           </div>
         ) : (<>
-          <div style={label}>Training</div>
-          {session ? (<>
-            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-              <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink }}>{session.dayName}{prog ? ` · ${prog.name}` : ""}</span>
-              <span style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{(session.sets || []).length} sets · {kFmt(fmtW(vol, u))} {u}</span>
-            </div>
-            {byEx.map(({ id, sets }) => (
-              <div key={id} style={{ ...line, alignItems: "flex-start" }}>
-                <span style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink, minWidth: 0 }}>{exName(id)}</span>
-                <span style={{ fontFamily: MONO, fontSize: 12, color: C.sub, textAlign: "right", flexShrink: 0 }}>{sets.map((x) => x.w > 0 ? `${wStr(x.w, u)}×${x.reps}` : `${x.reps}`).join("  ")}</span>
+          <div style={label}>Training{sessions.length > 1 ? ` · ${sessions.length} sessions` : ""}</div>
+          {sessions.length ? sessions.map((session, si) => {
+            const vol = (session.sets || []).reduce((n, x) => n + (x.w || 0) * (x.reps || 0), 0);
+            const pn = progName(session.programId);
+            return (
+              <div key={si} style={{ marginTop: si ? 16 : 0 }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+                  <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink, minWidth: 0 }}>{session.dayName}{pn ? ` · ${pn}` : ""}</span>
+                  <span style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{(session.sets || []).length} sets · {kFmt(fmtW(vol, u))} {u}</span>
+                </div>
+                {setsByExercise(session.sets).map(({ id, sets }) => (
+                  <div key={id} style={{ ...line, alignItems: "flex-start" }}>
+                    <span style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink, minWidth: 0 }}>{exName(id)}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 12, color: C.sub, textAlign: "right", flexShrink: 0 }}>{sets.map((x) => x.w > 0 ? `${wStr(x.w, u)}×${x.reps}` : `${x.reps}`).join("  ")}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </>) : (
+            );
+          }) : (
             <div style={{ fontFamily: SANS, fontSize: 13.5, color: missed ? C.amber : C.sub, lineHeight: 1.5 }}>
               {missed ? `${wLabel(aidx)} was scheduled and never logged.` : "No workout logged."}
             </div>
