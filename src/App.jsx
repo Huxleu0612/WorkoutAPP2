@@ -445,12 +445,6 @@ const effWeeks = (p) => effMs(p) / (7 * DAYMS);
 const programWeek = (p) => Math.min(p?.weeks || 12, Math.floor(effWeeks(p)) + 1);
 const durStr = (p) => { const d = Math.floor(effMs(p) / DAYMS); const w = Math.floor(d / 7), rd = d % 7; if (d < 7) return `${d} day${d !== 1 ? "s" : ""}`; return `${w} week${w !== 1 ? "s" : ""}${rd ? ` ${rd}d` : ""}`; };
 const sessionsFor = (h, pid) => h.filter((x) => x.programId === pid);
-// The last time you actually did this exercise, set by set, newest session wins. exx.last
-// only ever kept a one-set summary, so the session table's LAST column had nothing to print
-// for anything but an AMRAP — it advertised "TARGET · LAST" and then showed the target
-// twice. The real per-set record is in history, so read it from there. history is appended
-// in order, hence the backwards walk. Today's own draft is skipped: what you are lifting
-// right now is not what you lifted last time.
 // The last time you did this exercise IN THIS SLOT, set by set. The slot matters: on GZCLP
 // the bench is 5x3 as a T1 on one day and 3x10 as a T2 on another, so "the last session
 // containing bench" hands you whichever came last and lines 10 actual reps up against a
@@ -2006,6 +2000,15 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
         const lastLog = lastSetsFor(history, exx.id, { exceptDate: live.dateKey, programId: active.id, dayIdx: live.dayIdx, rowCount: rows.length });
         // Only line numbers up against the target when they are actually comparable.
         const lastComparable = lastLog && lastLog.match !== "other";
+        // Only the traffic-light system gets a dot. rir3 is the one where the rating IS how
+        // hard the set felt, so replaying it tells you something you cannot read off the
+        // weight. GZCLP and the other percentage programs rate a set "logged" — there is no
+        // feel recorded to show — and linear's hit/miss is a verdict on the reps, which the
+        // rep count beside it already says. Gating on rir3 by name rather than on "has a
+        // colour" is what keeps this off GZCLP for good.
+        const showsFeel = strategy.setRatingKind === "rir3";
+        const feltOn = (i) => (showsFeel && lastComparable ? RIR[lastLog.sets[i]?.rir] || null : null);
+        const anyFelt = showsFeel && lastComparable && lastLog.sets.some((x) => RIR[x.rir]);
         const lastTxt = (i) => { if (!lastComparable) return null; const x = lastLog.sets[i]; return x ? (x.w > 0 ? `${wStr(x.w, u)}×${x.reps}` : `${x.reps}`) : null; };
         const lastDateStr = lastLog ? `${WD_LONG[new Date(lastLog.date).getDay()].slice(0, 3)} ${new Date(lastLog.date).getDate()} ${MON[new Date(lastLog.date).getMonth()]}` : null;
         const th = { flex: 1, fontFamily: MONO, fontSize: 10, letterSpacing: .8, color: C.faint, textAlign: "center" };
@@ -2057,7 +2060,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
             )}
             <div style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, margin: "0 2px 7px", lineHeight: 1.45 }}>
               {!lastLog ? "No previous record for this exercise yet."
-                : lastComparable ? `Last time here · ${lastDateStr}${lastLog.match === "shape" ? " · closest matching session" : ""}`
+                : lastComparable ? `Last time here · ${lastDateStr}${lastLog.match === "shape" ? " · closest matching session" : ""}${anyFelt ? " · the dot is how that set felt" : ""}`
                 : `First time doing this in this slot. You last did it ${lastDateStr} as ${setsSummary(lastLog.sets, u)}, which is a different set-up.`}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 7px" }}>
@@ -2078,6 +2081,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
                 ? (spec.kind === "amrap" ? <span style={{ color: ACC, fontWeight: 700 }}>AMRAP</span> : `${spec.reps} reps`)
                 : null;
               const wasTxt = lastTxt(si);
+              const felt = feltOn(si);
               return (
                 <div key={si}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0" }}>
@@ -2087,7 +2091,10 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
                         the column. */}
                     <div style={{ flex: 1, textAlign: "center", lineHeight: 1.25, minWidth: 0 }}>
                       {target && <div style={{ fontFamily: MONO, fontSize: 12, color: C.faint }}>{target}</div>}
-                      <div style={{ fontFamily: MONO, fontSize: target ? 10.5 : 12, color: target ? NEU.n600 : C.faint }}>{wasTxt || "—"}</div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, fontFamily: MONO, fontSize: target ? 10.5 : 12, color: target ? NEU.n600 : C.faint }}>
+                        <span>{wasTxt || "—"}</span>
+                        {felt && <span title={`Felt ${felt.label.toLowerCase()} — ${felt.note}`} aria-label={`felt ${felt.label.toLowerCase()}, ${felt.note}`} style={{ width: 7, height: 7, borderRadius: 4, background: felt.c, flexShrink: 0 }} />}
+                      </div>
                     </div>
                     <div style={cell}><input inputMode="decimal" placeholder={bw ? "BW" : "—"} value={sd.w || ""} onChange={(e) => upd(key, "w", e.target.value)} style={inp} /></div>
                     <div style={cell}><input inputMode="numeric" placeholder={spec ? String(spec.reps) : "—"} value={sd.reps || ""} onChange={(e) => upd(key, "reps", e.target.value)} style={inp} /></div>
