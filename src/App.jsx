@@ -3176,9 +3176,12 @@ function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, o
 
   return (
     <div onClick={onClose} style={{ ...sheetScrim, zIndex: 70 }}>
-      <div onClick={(e) => e.stopPropagation()} style={sheetShell}>
+      <div onClick={(e) => e.stopPropagation()} style={steppedSheetShell}>
         <div style={grabHandle} />
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        {/* Held still on purpose. Letting the sheet size to its content put these arrows
+            hundreds of pixels apart between a day with a full session and an empty one, so
+            tapping through days meant chasing them down the screen. */}
+        <div style={{ ...steppedHeader, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
           <button onClick={() => onStep(-1)} style={miniRound} aria-label="Previous day"><ChevronLeft size={17} /></button>
           <div style={{ textAlign: "center", minWidth: 0 }}>
             <div style={{ fontFamily: SANS, fontSize: 18, fontWeight: 500, color: C.ink, letterSpacing: -0.3, whiteSpace: "nowrap" }}>
@@ -3191,8 +3194,9 @@ function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, o
           <button onClick={() => !isToday && onStep(1)} disabled={isToday} style={{ ...miniRound, opacity: isToday ? 0.35 : 1, cursor: isToday ? "default" : "pointer" }} aria-label="Next day"><ChevronRight size={17} /></button>
         </div>
 
+        <div style={steppedBody}>
         {nothing ? (
-          <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, textAlign: "center", padding: "28px 10px 10px", lineHeight: 1.55 }}>
+          <div style={{ fontFamily: SANS, fontSize: 13.5, color: C.sub, textAlign: "center", padding: "40px 10px 10px", lineHeight: 1.55 }}>
             Nothing recorded on this day.
           </div>
         ) : (<>
@@ -3242,6 +3246,7 @@ function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, o
         </>)}
 
         <button onClick={onClose} style={{ width: "100%", height: 44, marginTop: 20, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 14.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Close</button>
+        </div>
       </div>
     </div>
   );
@@ -3268,9 +3273,11 @@ function HistorySheet({ habits, history, read, weightLog, programs, unit, onClos
 
   return (
     <div onClick={onClose} style={sheetScrim}>
-      <div onClick={(e) => e.stopPropagation()} style={sheetShell}>
+      <div onClick={(e) => e.stopPropagation()} style={steppedSheetShell}>
         <div style={grabHandle} />
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        {/* Same reason as the day stepper: a five-week month and a six-week month are
+            different heights, which walked these arrows up and down as you paged. */}
+        <div style={{ ...steppedHeader, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <button onClick={() => setBack(back + 1)} style={miniRound} aria-label="Previous month"><ChevronLeft size={17} /></button>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontFamily: SANS, fontSize: 18, fontWeight: 500, color: C.ink, letterSpacing: -0.3 }}>{MON_LONG[m.getMonth()]} {m.getFullYear()}</div>
@@ -3281,6 +3288,7 @@ function HistorySheet({ habits, history, read, weightLog, programs, unit, onClos
           <button onClick={() => setBack(Math.max(0, back - 1))} style={miniRound} aria-label="Next month"><ChevronRight size={17} color={back > 0 ? C.ink : C.faint} /></button>
         </div>
 
+        <div style={steppedBody}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "14px 0 8px" }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: SANS, fontSize: 10, color: NEU.n600 }}><span style={{ width: 5, height: 5, borderRadius: 3, background: C.green }} />trained</span>
           <HeatLegend />
@@ -3313,6 +3321,7 @@ function HistorySheet({ habits, history, read, weightLog, programs, unit, onClos
               <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, marginTop: 5, fontVariantNumeric: "tabular-nums" }}>{t.v}</div>
             </div>
           ))}
+        </div>
         </div>
       </div>
       {day && <DaySheet dateKey={day} habits={habits} history={history} read={read} weightLog={weightLog} programs={programs} unit={unit} onStep={stepDay} onClose={() => setDay(null)} />}
@@ -3731,6 +3740,13 @@ function Read({ read, setRead, friendsApi }) {
 ================================================================ */
 const sheetShell = { width: "100%", maxWidth: 430, background: C.card, borderRadius: "14px 14px 0 0", boxShadow: C.shadowLg, padding: "18px 17px 26px", maxHeight: "86vh", overflowY: "auto" };
 const sheetScrim = { position: "fixed", inset: 0, background: C.scrim, zIndex: 60, display: "flex", alignItems: "flex-end", justifyContent: "center" };
+// A sheet whose height does not depend on what is in it. These sheets are anchored to the
+// bottom of the screen, so sizing to content moves their top edge — which is where a stepper
+// lives — by however much the content differs. Fixed height, header outside the scroller,
+// body scrolls on its own.
+const steppedSheetShell = { ...{ width: "100%", maxWidth: 430, background: C.card, borderRadius: "14px 14px 0 0", boxShadow: C.shadowLg }, height: "86vh", display: "flex", flexDirection: "column", overflow: "hidden", padding: "18px 0 0" };
+const steppedHeader = { flexShrink: 0, padding: "0 17px 13px", borderBottom: `1px solid ${C.lineSoft}` };
+const steppedBody = { flex: 1, minHeight: 0, overflowY: "auto", padding: "0 17px 26px" };
 const grabHandle = { width: 36, height: 3, borderRadius: 2, background: C.line, margin: "0 auto 18px" };
 const finField = { width: "100%", background: C.page, border: `1px solid ${C.line}`, borderRadius: 8, padding: "11px 12px", fontFamily: SANS, fontSize: 16, color: C.ink, outline: "none" };
 const finLabel = { fontFamily: SANS, fontSize: 10, fontWeight: 500, letterSpacing: 1.6, textTransform: "uppercase", color: NEU.n500, marginBottom: 6 };
