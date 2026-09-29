@@ -729,23 +729,37 @@ const matchesWorkout = (h, ai) => (h.dayIdx != null ? h.dayIdx === ai : h.dayNam
 // would hand it to THIS Saturday — a day that has not happened, ticked off by a session
 // that predates it. Forgiving a day or two late is the point of the loose pass; inventing
 // a completed future is not.
+// A session may carry `slotKey`: the scheduled day it was making up. Starting last
+// Saturday's workout on a Tuesday sets it, so the session keeps its real date — you trained
+// on Tuesday and the volume, the streak and the day view all say so — while the week it
+// belongs to stops reading as missed. Progression already treated it that way, because
+// GZCLP advances on sequence rather than on dates; this is the grid catching up with it.
+// A session that names its slot claims that slot and no other, so it can never drift onto
+// some other day that happens to run the same workout.
 function weekSessionSlots(history, program, date) {
   const slots = new Map();
   if (!program || !(program.scheduleDays || []).length || !(program.days || []).length) return slots;
   const keys = weekKeysOf(date);
   const todayKey = ymd(new Date());
   const pool = history
-    .filter((h) => h.programId === program.id && keys.includes(h.date))
+    .filter((h) => h.programId === program.id && keys.includes(h.slotKey || h.date))
     .sort((a, b) => a.date.localeCompare(b.date));
   const used = new Set();
   const scheduled = keys.map((k) => ({ k, ai: assignedIdx(program, new Date(k)) })).filter((s) => s.ai != null && s.k <= todayKey);
-  const claim = (exactOnly) => scheduled.forEach(({ k, ai }) => {
+  // 0: it said which slot it was for. 1: it happened on the day. 2: same workout, same week.
+  const claim = (pass) => scheduled.forEach(({ k, ai }) => {
     if (slots.has(k)) return;
-    const i = pool.findIndex((h, j) => !used.has(j) && matchesWorkout(h, ai) && (!exactOnly || h.date === k));
+    const i = pool.findIndex((h, j) => {
+      if (used.has(j)) return false;
+      if (h.slotKey) return pass === 0 && h.slotKey === k;
+      if (pass === 0) return false;
+      return matchesWorkout(h, ai) && (pass === 2 || h.date === k);
+    });
     if (i !== -1) { used.add(i); slots.set(k, pool[i]); }
   });
-  claim(true);
-  claim(false);
+  claim(0);
+  claim(1);
+  claim(2);
   return slots;
 }
 // how many scheduled sessions should have happened by today (pause-aware)
@@ -1668,7 +1682,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onDelete
   // `hist` is overridable so redoing a session can count against history with the old
   // session already removed — otherwise a wave program would read the week it is on off a
   // session that is about to stop existing.
-  const startWorkout = (idx, hist = history) => {
+  const startWorkout = (idx, hist = history, slotKey = null) => {
     const d = active.days[idx];
     const init = {};
     const sessionCountAtStart = sessionsFor(hist, active.id).length;
@@ -1687,7 +1701,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onDelete
     // startedAt stays null so opening a workout to see what is in it does not start the
     // clock. Looking at Wednesday's session on Monday should cost nothing. The clock starts
     // on the first logged set, or when you tap start.
-    setDraft({ programId: active.id, dayIdx: idx, dateKey: ymd(new Date()), setData: init, done: {}, startedAt: null });
+    setDraft({ programId: active.id, dayIdx: idx, dateKey: ymd(new Date()), slotKey, setData: init, done: {}, startedAt: null });
     setOpenRating(null); setConfirmDiscard(false); setPhase("active");
   };
   // The per-exercise half of startWorkout, pulled out so a swapped-in exercise gets the
@@ -1785,7 +1799,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onDelete
     // Whatever week you were browsing, finishing a session puts you back at now.
     setWkOffset(0);
     setSavedCount(Object.keys(dn).length); setFinishedIdx(idx);
-    onFinish({ date: live.dateKey || ymd(new Date()), programId: active.id, dayIdx: idx, dayName: wLabel(idx), sets }, newDays, readiness);
+    onFinish({ date: live.dateKey || ymd(new Date()), ...(live.slotKey && live.slotKey !== live.dateKey ? { slotKey: live.slotKey } : {}), programId: active.id, dayIdx: idx, dayName: wLabel(idx), sets }, newDays, readiness);
     setDraft(null); setPhase("done");
   };
 
@@ -1933,7 +1947,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onDelete
           </div>
           {wkOffset !== 0 && <button onClick={() => setWkOffset(0)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: SANS, fontSize: 11, color: ACC, WebkitTapHighlightColor: "transparent" }}>Back to this week</button>}
         </div>
-        {wkOffset !== 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, padding: "0 4px 10px", lineHeight: 1.5 }}>Starting one of these trains it now and logs it today — it does not backdate the session.</div>}
+        {wkOffset !== 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, padding: "0 4px 10px", lineHeight: 1.5 }}>Starting one of these trains it now. It is logged today, where your volume and streak count it, and also ticks off the day here that it was making up.</div>}
         <DndContext sensors={scheduleSensors} onDragEnd={({ active, over }) => { if (over) swapScheduleDays(Number(active.id.slice(6)), Number(over.id.slice(6))); }} modifiers={[restrictToVerticalAxis]}>
           <div style={{ display: "grid", gap: 10 }}>
             {week.map((d, i) => {
@@ -1961,7 +1975,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onDelete
                         )}
                       </div>
                       {isWorkout && !d.done && (
-                        <button onClick={() => (d.inProgress ? setPhase("active") : startWorkout(d.aidx))} onPointerDown={(e) => e.stopPropagation()} style={{ height: 40, padding: "0 15px", borderRadius: 8, border: `1px solid ${d.inProgress || missed ? C.amber : AC.base}`, background: "none", color: d.inProgress || missed ? C.amber : ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Play size={14} weight="fill" /> {d.inProgress ? "Resume" : "Start"}</button>
+                        <button onClick={() => (d.inProgress ? setPhase("active") : startWorkout(d.aidx, history, d.past ? d.key : null))} onPointerDown={(e) => e.stopPropagation()} style={{ height: 40, padding: "0 15px", borderRadius: 8, border: `1px solid ${d.inProgress || missed ? C.amber : AC.base}`, background: "none", color: d.inProgress || missed ? C.amber : ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Play size={14} weight="fill" /> {d.inProgress ? "Resume" : "Start"}</button>
                       )}
                       {isWorkout && d.done && logged && (
                         <button onClick={() => setConfirmRedo(confirmRedo === d.key ? null : d.key)} onPointerDown={(e) => e.stopPropagation()}
@@ -1984,7 +1998,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onDelete
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button onClick={() => setConfirmRedo(null)} style={{ flex: 1, height: 38, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 13.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Keep it</button>
-                      <button onClick={() => { setConfirmRedo(null); onDeleteSession(logged); startWorkout(d.aidx, history.filter((x) => x !== logged)); }}
+                      <button onClick={() => { setConfirmRedo(null); onDeleteSession(logged); startWorkout(d.aidx, history.filter((x) => x !== logged), d.past ? d.key : null); }}
                         style={{ flex: 1, height: 38, borderRadius: 8, border: `1px solid ${C.red}`, background: "none", color: C.red, fontFamily: SANS, fontSize: 13.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Delete and redo</button>
                     </div>
                   </div>
@@ -3414,6 +3428,11 @@ function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, o
                   <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink, minWidth: 0 }}>{session.dayName}{pn ? ` · ${pn}` : ""}</span>
                   <span style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{(session.sets || []).length} sets · {kFmt(fmtW(vol, u))} {u}</span>
                 </div>
+                {session.slotKey && session.slotKey !== session.date && (
+                  <div style={{ fontFamily: SANS, fontSize: 11.5, color: AC.a300, marginTop: 3 }}>
+                    Making up {WD_LONG[new Date(session.slotKey).getDay()]} {new Date(session.slotKey).getDate()} {MON[new Date(session.slotKey).getMonth()]}
+                  </div>
+                )}
                 {/* The way out for a session logged on the wrong day, or one that matches no
                     scheduled slot and so can never be reached from the Train screen. */}
                 {onDeleteSession && (confirmDel === si ? (
