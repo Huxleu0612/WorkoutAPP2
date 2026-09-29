@@ -724,15 +724,21 @@ const matchesWorkout = (h, ai) => (h.dayIdx != null ? h.dayIdx === ai : h.dayNam
 // StrongLifts A/B/A across Mon/Wed/Fri, a single Workout A used to tick off both Monday and
 // Friday — including Fridays that had not happened yet.
 // Exact-date matches are assigned first so a session always lands on its own day when it can.
+// And no slot in the future can be claimed at all. Doing last Saturday's workout today
+// produces a session dated today carrying that workout's index, and the loose second pass
+// would hand it to THIS Saturday — a day that has not happened, ticked off by a session
+// that predates it. Forgiving a day or two late is the point of the loose pass; inventing
+// a completed future is not.
 function weekSessionSlots(history, program, date) {
   const slots = new Map();
   if (!program || !(program.scheduleDays || []).length || !(program.days || []).length) return slots;
   const keys = weekKeysOf(date);
+  const todayKey = ymd(new Date());
   const pool = history
     .filter((h) => h.programId === program.id && keys.includes(h.date))
     .sort((a, b) => a.date.localeCompare(b.date));
   const used = new Set();
-  const scheduled = keys.map((k) => ({ k, ai: assignedIdx(program, new Date(k)) })).filter((s) => s.ai != null);
+  const scheduled = keys.map((k) => ({ k, ai: assignedIdx(program, new Date(k)) })).filter((s) => s.ai != null && s.k <= todayKey);
   const claim = (exactOnly) => scheduled.forEach(({ k, ai }) => {
     if (slots.has(k)) return;
     const i = pool.findIndex((h, j) => !used.has(j) && matchesWorkout(h, ai) && (!exactOnly || h.date === k));
@@ -1616,7 +1622,7 @@ function RestFooter({ until, onExtend, onSkip }) {
   );
 }
 
-function Train({ profile, programs, history, draft, setDraft, onFinish, onReorderSchedule, go, equipment, setEquipment }) {
+function Train({ profile, programs, history, draft, setDraft, onFinish, onDeleteSession, onReorderSchedule, go, equipment, setEquipment }) {
   const active = activeProgram(programs);
   const u = profile.unit;
   const live = draft && active && draft.programId === active.id ? draft : null;
@@ -1633,6 +1639,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
   const [wkOffset, setWkOffset] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [subTarget, setSubTarget] = useState(null); // { mode: "swap" | "add", i }
+  const [confirmRedo, setConfirmRedo] = useState(null); // date key of the row being redone
   const scheduleSensors = useReorderSensors();
   const swapScheduleDays = (dowA, dowB) => {
     if (!active || dowA === dowB) return;
@@ -1658,10 +1665,13 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
   if (!active) return trainEmpty("No program yet", "Nothing scheduled", "Pick a program from the library, or build your own, and your week appears here.", "Browse programs");
   if (!active.days.length) return trainEmpty(active.name, "No training days yet", `Add days and exercises to ${active.name} before you start training it.`, "Edit program");
 
-  const startWorkout = (idx) => {
+  // `hist` is overridable so redoing a session can count against history with the old
+  // session already removed — otherwise a wave program would read the week it is on off a
+  // session that is about to stop existing.
+  const startWorkout = (idx, hist = history) => {
     const d = active.days[idx];
     const init = {};
-    const sessionCountAtStart = sessionsFor(history, active.id).length;
+    const sessionCountAtStart = sessionsFor(hist, active.id).length;
     d.ex.forEach((exx, ei) => {
       const strategy = progressionOf(active, exx);
       const ctx = { lastReadiness: active.lastReadiness, program: active, sessionCount: sessionCountAtStart };
@@ -1932,8 +1942,10 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
               const border = d.done ? C.green : d.inProgress ? C.amber : d.isToday && isWorkout ? ACC : C.line;
               const iconBg = d.done ? C.greenBg : d.inProgress ? C.amberBg : d.isToday && isWorkout ? ACC_BG : C.page;
               const iconColor = d.done ? C.green : d.inProgress ? C.amber : d.isToday && isWorkout ? ACC : C.faint;
+              const logged = d.done ? slots.get(d.key) : null;
               return (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div key={i}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ width: 40, fontFamily: MONO, fontSize: 11, fontWeight: 700, color: d.isToday ? ACC : C.faint, flexShrink: 0 }}>{WD_LONG[d.dow].slice(0, 3).toUpperCase()}</div>
                   <ScheduleSwapRow dow={d.dow} draggable={isWorkout}>
                     <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 12, background: C.card, border: `1.5px solid ${border}`, borderRadius: 13, padding: "12px 14px", minHeight: 66 }}>
@@ -1951,11 +1963,32 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
                       {isWorkout && !d.done && (
                         <button onClick={() => (d.inProgress ? setPhase("active") : startWorkout(d.aidx))} onPointerDown={(e) => e.stopPropagation()} style={{ height: 40, padding: "0 15px", borderRadius: 8, border: `1px solid ${d.inProgress || missed ? C.amber : AC.base}`, background: "none", color: d.inProgress || missed ? C.amber : ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Play size={14} weight="fill" /> {d.inProgress ? "Resume" : "Start"}</button>
                       )}
+                      {isWorkout && d.done && logged && (
+                        <button onClick={() => setConfirmRedo(confirmRedo === d.key ? null : d.key)} onPointerDown={(e) => e.stopPropagation()}
+                          style={{ height: 36, padding: "0 12px", borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 5, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><RotateCcw size={14} /> Redo</button>
+                      )}
                       {!isWorkout && (
                         <button onClick={() => setPhase("pick")} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, color: ACC, fontFamily: SANS, fontSize: 13.5, fontWeight: 600, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Plus size={16} strokeWidth={2.5} /> Add</button>
                       )}
                     </div>
                   </ScheduleSwapRow>
+                </div>
+                {/* Deletes the logged session and opens the workout again from scratch. The
+                    weight it already advanced to stays advanced — the patch it applied was
+                    never recorded anywhere, so there is nothing to roll back, and saying so
+                    is better than implying a clean undo. */}
+                {confirmRedo === d.key && logged && (
+                  <div style={{ marginLeft: 50, marginTop: 8, background: C.redBg, borderRadius: 10, padding: 12 }}>
+                    <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, lineHeight: 1.5, marginBottom: 10 }}>
+                      Delete the {(logged.sets || []).length} sets logged for {wLabel(d.aidx)} and start it again? Next session's recommended weights stay where they are.
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={() => setConfirmRedo(null)} style={{ flex: 1, height: 38, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 13.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Keep it</button>
+                      <button onClick={() => { setConfirmRedo(null); onDeleteSession(logged); startWorkout(d.aidx, history.filter((x) => x !== logged)); }}
+                        style={{ flex: 1, height: 38, borderRadius: 8, border: `1px solid ${C.red}`, background: "none", color: C.red, fontFamily: SANS, fontSize: 13.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Delete and redo</button>
+                    </div>
+                  </div>
+                )}
                 </div>
               );
             })}
@@ -3316,7 +3349,8 @@ function HabitSheet({ habit, friendsApi, onSave, onDelete, onClose }) {
    rather than introducing any record of its own. Finance is absent because it genuinely has
    no per-day shape: it is quarterly check-ins, and inventing a daily figure for it would be
    making something up. */
-function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, onStep, onClose }) {
+function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, onStep, onDeleteSession, onClose }) {
+  const [confirmDel, setConfirmDel] = useState(null);
   const dt = startOfDay(new Date(dateKey));
   const today0 = startOfDay(new Date());
   const isToday = sameDay(dt, today0);
@@ -3380,6 +3414,19 @@ function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, o
                   <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink, minWidth: 0 }}>{session.dayName}{pn ? ` · ${pn}` : ""}</span>
                   <span style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{(session.sets || []).length} sets · {kFmt(fmtW(vol, u))} {u}</span>
                 </div>
+                {/* The way out for a session logged on the wrong day, or one that matches no
+                    scheduled slot and so can never be reached from the Train screen. */}
+                {onDeleteSession && (confirmDel === si ? (
+                  <div style={{ background: C.redBg, borderRadius: 8, padding: 11, margin: "9px 0 2px" }}>
+                    <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, lineHeight: 1.5, marginBottom: 9 }}>Delete this session for good? Its sets leave your history and your totals. The weights it already advanced stay where they are.</div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={() => setConfirmDel(null)} style={{ flex: 1, height: 36, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 500, cursor: "pointer" }}>Keep it</button>
+                      <button onClick={() => { setConfirmDel(null); onDeleteSession(session); }} style={{ flex: 1, height: 36, borderRadius: 8, border: `1px solid ${C.red}`, background: "none", color: C.red, fontFamily: SANS, fontSize: 13, fontWeight: 500, cursor: "pointer" }}>Delete</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => setConfirmDel(si)} style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: "none", padding: "5px 0 0", cursor: "pointer", fontFamily: SANS, fontSize: 11.5, color: NEU.n600, WebkitTapHighlightColor: "transparent" }}><Trash2 size={12} /> Delete this session</button>
+                ))}
                 {setsByExercise(session.sets).map(({ id, sets }) => (
                   <div key={id} style={{ ...line, alignItems: "flex-start" }}>
                     <span style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink, minWidth: 0 }}>{exName(id)}</span>
@@ -3432,7 +3479,7 @@ function DaySheet({ dateKey, habits, history, read, weightLog, programs, unit, o
    only navigation, so a day eight months ago costs eight taps and nothing else. Every past
    square opens, including empty ones, because "did I do anything that Tuesday" is a real
    question and a dead square is a real answer. */
-function HistorySheet({ habits, history, read, weightLog, programs, unit, onClose }) {
+function HistorySheet({ habits, history, read, weightLog, programs, unit, onDeleteSession, onClose }) {
   const [back, setBack] = useState(0);
   const [day, setDay] = useState(null);
   const now = new Date();
@@ -3500,7 +3547,7 @@ function HistorySheet({ habits, history, read, weightLog, programs, unit, onClos
         </div>
         </div>
       </div>
-      {day && <DaySheet dateKey={day} habits={habits} history={history} read={read} weightLog={weightLog} programs={programs} unit={unit} onStep={stepDay} onClose={() => setDay(null)} />}
+      {day && <DaySheet dateKey={day} habits={habits} history={history} read={read} weightLog={weightLog} programs={programs} unit={unit} onStep={stepDay} onDeleteSession={onDeleteSession} onClose={() => setDay(null)} />}
     </div>
   );
 }
@@ -4280,6 +4327,9 @@ export default function App() {
 
   if (!profile.onboarded) return <Onboarding onDone={(p) => setProfile(p)} />;
 
+  // Identity, not a field match: two sessions on one day with the same workout are
+  // indistinguishable by value, and deleting the wrong one would be silent.
+  const deleteSession = (session) => setHistory((h) => h.filter((x) => x !== session));
   const finishSession = (session, updatedDays, readiness) => { setPrograms((ps) => ps.map((p) => p.id === session.programId ? { ...p, days: updatedDays, lastReadiness: readiness } : p)); setHistory((h) => [...h, session]); };
   const reorderSchedule = (id, scheduleDays) => setPrograms((ps) => ps.map((p) => p.id === id ? { ...p, scheduleDays } : p));
   const resetAll = () => { try { ["wa_profile", "wa_weightlog", "wa_programs", "wa_history", "wa_draft", "wa_maxes", "wa_equipment", "wa_habits", "wa_read", "wa_finance"].forEach((k) => localStorage.removeItem(k)); } catch {} setWeightLog({}); setPrograms([]); setHistory([]); setDraft(null); setMaxes({}); setEquipment(DEFAULT_EQUIPMENT); setHabits([]); setRead(READ_DEFAULT); setFin(FIN_DEFAULT); setProfile({ onboarded: false }); setTab("today"); setSettingsOpen(false); };
@@ -4294,7 +4344,7 @@ export default function App() {
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingTop: 14 }}>
           {pillar?.locked && <LockedScreen label={pillar.label} Icon={pillar.Icon} blurb={pillar.blurb} />}
           {tab === "today" && <Dashboard profile={profile} weightLog={weightLog} setWeightLog={setWeightLog} programs={programs} history={history} habits={habits} setHabits={setHabits} read={read} go={setTab} onSettings={openSettings} onHistory={() => setHistoryOpen(true)} />}
-          {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} onReorderSchedule={reorderSchedule} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
+          {tab === "train" && <Train profile={profile} programs={programs} history={history} draft={draft} setDraft={setDraft} onFinish={finishSession} onDeleteSession={deleteSession} onReorderSchedule={reorderSchedule} go={setTab} equipment={equipment} setEquipment={setEquipment} />}
           {tab === "read" && <Read read={read} setRead={setRead} friendsApi={friendsApi} />}
           {tab === "finance" && <Finance fin={fin} setFin={setFin} onSettings={openSettings} />}
           {tab === "habits" && <Habits habits={habits} setHabits={setHabits} friendsApi={friendsApi} onHistory={() => setHistoryOpen(true)} />}
@@ -4311,7 +4361,7 @@ export default function App() {
             </button>); })}
         </div>
       </div>
-      {historyOpen && <HistorySheet habits={habits} history={history} read={read} weightLog={weightLog} programs={programs} unit={profile.unit} onClose={() => setHistoryOpen(false)} />}
+      {historyOpen && <HistorySheet habits={habits} history={history} read={read} weightLog={weightLog} programs={programs} unit={profile.unit} onDeleteSession={deleteSession} onClose={() => setHistoryOpen(false)} />}
       {settingsOpen && <SettingsSheet profile={profile} setProfile={setProfile} programs={programs} history={history} weightLog={weightLog} onReset={resetAll} equipment={equipment} setEquipment={setEquipment} fin={fin} setFin={setFin} sync={sync} friendsApi={friendsApi} habits={habits} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
