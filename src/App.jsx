@@ -1543,7 +1543,7 @@ function useTicker(on) {
 const mmss = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const REST_MS = 90000, REST_SCALE = 120000;
 
-function SessionHeader({ live, label, sub, doneCount, totalSets, onMinimise, menuOpen, setMenuOpen, onDiscard, onRestartTimer, onStartClock }) {
+function SessionHeader({ live, label, sub, doneCount, totalSets, onMinimise, menuOpen, setMenuOpen, onDiscard, onEditEx, onRestartTimer, onStartClock }) {
   useTicker(true);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const elapsed = live.startedAt ? Date.now() - new Date(live.startedAt).getTime() : 0;
@@ -1576,6 +1576,8 @@ function SessionHeader({ live, label, sub, doneCount, totalSets, onMinimise, men
             {/* catches the tap that should dismiss the menu — without it the menu sits over the session */}
             <div onClick={() => setMenuOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 29 }} />
             <div style={{ position: "absolute", right: 0, top: 42, background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, boxShadow: C.shadowMd, padding: 4, zIndex: 30, minWidth: 168 }}>
+              <button onClick={onEditEx} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 12px", borderRadius: 7, border: "none", background: "none", cursor: "pointer", fontFamily: SANS, fontSize: 14, color: C.ink, WebkitTapHighlightColor: "transparent" }}><Pencil size={15} /> Edit exercises</button>
+              <div style={{ height: 1, background: C.lineSoft, margin: "4px 8px" }} />
               <button onClick={onDiscard} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 12px", borderRadius: 7, border: "none", background: "none", cursor: "pointer", fontFamily: SANS, fontSize: 14, color: C.red, WebkitTapHighlightColor: "transparent" }}><Trash2 size={15} /> Discard workout</button>
             </div>
           </>)}
@@ -1628,6 +1630,9 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
   const [restUntil, setRestUntil] = useState(null);
   const [expandedEx, setExpandedEx] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [wkOffset, setWkOffset] = useState(0);
+  const [editOpen, setEditOpen] = useState(false);
+  const [subTarget, setSubTarget] = useState(null); // { mode: "swap" | "add", i }
   const scheduleSensors = useReorderSensors();
   const swapScheduleDays = (dowA, dowB) => {
     if (!active || dowA === dowB) return;
@@ -1675,6 +1680,61 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
     setDraft({ programId: active.id, dayIdx: idx, dateKey: ymd(new Date()), setData: init, done: {}, startedAt: null });
     setOpenRating(null); setConfirmDiscard(false); setPhase("active");
   };
+  // The per-exercise half of startWorkout, pulled out so a swapped-in exercise gets the
+  // same seeding as one that was there from the start.
+  const seedRows = (exx, ei, into) => {
+    const strategy = progressionOf(active, exx);
+    const ctx = { lastReadiness: active.lastReadiness, program: active, sessionCount: sessionsFor(history, active.id).length };
+    const specs = strategy.getSetSpecs ? strategy.getSetSpecs(exx, ctx) : null;
+    if (specs) {
+      const tm = strategy.effectiveTM(exx, ctx);
+      specs.forEach((spec, si) => { into[`${ei}-${si}`] = { w: tm ? wStr(strategy.weightForSpec(tm, spec), u) : "", reps: String(spec.reps) }; });
+    } else {
+      const rec = strategy.recommend(exx, ctx);
+      Array.from({ length: setCount(exx) }).forEach((_, si) => { into[`${ei}-${si}`] = { w: exx.last?.logged && exx.last.w > 0 ? wStr(rec.w, u) : "", reps: exx.last?.logged ? String(exx.last.reps || 10) : "" }; });
+    }
+  };
+  // Logged data is keyed "exerciseIndex-setIndex", so any change to the list has to move it.
+  // `from` maps each new position to the old one it came from, or null for a fresh slot.
+  const reindexSession = (setData, done, from) => {
+    const sd = {}, dn = {};
+    from.forEach((oldI, newI) => {
+      if (oldI == null) return;
+      Object.keys(setData).forEach((k) => { const [e, si] = k.split("-"); if (+e === oldI) sd[`${newI}-${si}`] = setData[k]; });
+      Object.keys(done).forEach((k) => { const [e, si] = k.split("-"); if (+e === oldI) dn[`${newI}-${si}`] = done[k]; });
+    });
+    return { sd, dn };
+  };
+  const sessionEx = () => (live?.exOverride || active.days[live?.dayIdx ?? 0]?.ex || []);
+  const applyEdit = (nextEx, from, freshIdx) => {
+    setDraft((d) => {
+      const { sd, dn } = reindexSession(d.setData || {}, d.done || {}, from);
+      if (freshIdx != null) seedRows(nextEx[freshIdx], freshIdx, sd);
+      return { ...d, exOverride: nextEx, setData: sd, done: dn };
+    });
+    setExpandedEx(null); setOpenRating(null);
+  };
+  const removeEx = (i) => {
+    const cur = sessionEx();
+    if (cur.length < 2) return;
+    applyEdit(cur.filter((_, j) => j !== i), cur.map((_, j) => j).filter((j) => j !== i), null);
+  };
+  // A substitute is not part of a periodised plan, so it does not inherit one. On GZCLP or
+  // 5/3/1 an exercise with no tier would otherwise be handed the T1 template — a 5x3 at no
+  // weight — which is not a sensible prescription for a stand-in accessory.
+  const makeSub = (id, sets) => {
+    const periodised = !!progressionOf(active).getSetSpecs;
+    return { id, sets: sets || 3, subbed: true, last: { w: 0, reps: 10, rir: "amber", logged: false }, ...(periodised ? { progressionType: "rir" } : {}) };
+  };
+  const swapEx = (i, id) => {
+    const cur = sessionEx();
+    const next = cur.map((e, j) => (j === i ? makeSub(id, setCount(e)) : e));
+    applyEdit(next, cur.map((_, j) => (j === i ? null : j)), i);
+  };
+  const addEx = (id) => {
+    const cur = sessionEx();
+    applyEdit([...cur, makeSub(id)], [...cur.map((_, j) => j), null], cur.length);
+  };
   const upd = (key, field, val) => setDraft((d) => ({ ...d, setData: { ...d.setData, [key]: { ...(d.setData[key] || {}), [field]: val } } }));
   // logging a set is also what starts the rest clock — there is no separate action for it
   // Logging a set is also what starts the rest clock — there is no separate action for it —
@@ -1690,18 +1750,30 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
 
   const finish = (readiness) => {
     const idx = live.dayIdx, sdAll = live.setData, dn = live.done;
+    // What was actually trained, which is not necessarily what the program says: an edited
+    // session carries its own list.
+    const trained = live.exOverride || active.days[idx].ex;
     const sets = [];
-    const newDays = active.days.map((d, di) => {
-      if (di !== idx) return d;
-      return { ...d, ex: d.ex.map((exx, ei) => {
-        const rated = Object.keys(dn).filter((k) => k.startsWith(`${ei}-`));
-        if (!rated.length) return exx;
-        const loggedSets = rated.map((k) => { const sd = sdAll[k] || {}; return { w: parseFloat(sd.w) || 0, reps: parseInt(sd.reps) || 0, rating: dn[k] }; });
-        loggedSets.forEach((s) => sets.push({ exId: exx.id, w: s.w, reps: s.reps, rir: s.rating }));
-        const patch = progressionOf(active, exx).finishExercise(exx, loggedSets, { isBodyweight: isBW(exx.id), program: active });
-        return patch ? { ...exx, ...patch } : exx;
-      }) };
+    const patches = new Map();
+    trained.forEach((exx, ei) => {
+      // Sorted by set number rather than trusting key order, because editing the list
+      // rewrites these keys and the strategies read "the last set" off the end.
+      const rated = Object.keys(dn).filter((k) => k.startsWith(`${ei}-`)).sort((a, b) => Number(a.split("-")[1]) - Number(b.split("-")[1]));
+      if (!rated.length) return;
+      const loggedSets = rated.map((k) => { const sd = sdAll[k] || {}; return { w: parseFloat(sd.w) || 0, reps: parseInt(sd.reps) || 0, rating: dn[k] }; });
+      loggedSets.forEach((x) => sets.push({ exId: exx.id, w: x.w, reps: x.reps, rir: x.rating }));
+      const patch = progressionOf(active, exx).finishExercise(exx, loggedSets, { isBodyweight: isBW(exx.id), program: active });
+      if (patch) patches.set(exx.id, patch);
     });
+    // Progression is carried forward for the program's own exercises only. A one-off
+    // substitute logs its sets to history and leaves no mark on the program, which is the
+    // whole point of editing the session rather than the plan.
+    const newDays = active.days.map((d, di) => di !== idx ? d : { ...d, ex: d.ex.map((exx) => {
+      const patch = patches.get(exx.id);
+      return patch ? { ...exx, ...patch } : exx;
+    }) });
+    // Whatever week you were browsing, finishing a session puts you back at now.
+    setWkOffset(0);
     setSavedCount(Object.keys(dn).length); setFinishedIdx(idx);
     onFinish({ date: live.dateKey || ymd(new Date()), programId: active.id, dayIdx: idx, dayName: wLabel(idx), sets }, newDays, readiness);
     setDraft(null); setPhase("done");
@@ -1709,14 +1781,24 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
 
   /* ================= SCHEDULE ================= */
   if (phase === "schedule") {
-    const wkStart = mondayOf(new Date());
     const today0 = startOfDay(new Date());
+    // The list steps back a week at a time. A session you missed on Saturday is out of
+    // reach the moment Monday arrives otherwise — there was no way to get to it at all.
+    const wkStart = addDays(mondayOf(new Date()), wkOffset * 7);
+    const thisWk = mondayOf(new Date());
     const slots = weekSessionSlots(history, active, wkStart);
     const week = Array.from({ length: 7 }).map((_, i) => {
       const dt = addDays(wkStart, i); const key = ymd(dt); const aidx = assignedIdx(active, dt);
-      return { dt, key, dow: dt.getDay(), aidx, done: slots.has(key), inProgress: !!(live && live.dayIdx === aidx), isToday: sameDay(dt, new Date()), past: startOfDay(dt) < today0 };
+      return { dt, key, dow: dt.getDay(), aidx, done: slots.has(key), inProgress: !!(live && wkOffset === 0 && live.dayIdx === aidx), isToday: sameDay(dt, new Date()), past: startOfDay(dt) < today0 };
     });
-    const nextRow = week.find((d) => d.aidx != null && !d.done && !d.past) || week.find((d) => d.aidx != null && !d.done);
+    // The card at the top is always about now, so it reads the current week whatever the
+    // list below is showing.
+    const curSlots = weekSessionSlots(history, active, thisWk);
+    const curWeek = Array.from({ length: 7 }).map((_, i) => {
+      const dt = addDays(thisWk, i); const key = ymd(dt); const aidx = assignedIdx(active, dt);
+      return { dt, key, dow: dt.getDay(), aidx, done: curSlots.has(key), isToday: sameDay(dt, new Date()), past: startOfDay(dt) < today0 };
+    });
+    const nextRow = curWeek.find((d) => d.aidx != null && !d.done && !d.past) || curWeek.find((d) => d.aidx != null && !d.done);
 
     return (
       <div style={{ padding: "6px 17px 24px" }}>
@@ -1828,15 +1910,20 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
                     </div>
                   )}
                 </div>
-                <div style={{ fontFamily: SANS, fontSize: 11, color: NEU.n600, marginTop: 9, lineHeight: 1.45 }}>
-                  One bar per week, {series[0].label} to now. The faded bar is this week, still in progress — it is short because the week is not over.
-                </div>
               </Card>
             </>
           );
         })()}
 
-        <SectionLabel>This week's schedule</SectionLabel>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "0 2px 8px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <button onClick={() => setWkOffset(wkOffset - 1)} aria-label="Previous week" style={{ background: "none", border: "none", cursor: "pointer", padding: 2, display: "flex", WebkitTapHighlightColor: "transparent" }}><ChevronLeft size={15} color={C.faint} /></button>
+            <Eyebrow>{wkOffset === 0 ? "This week's schedule" : `${wkStart.getDate()} ${MON[wkStart.getMonth()]} – ${addDays(wkStart, 6).getDate()} ${MON[addDays(wkStart, 6).getMonth()]}`}</Eyebrow>
+            <button onClick={() => setWkOffset(Math.min(0, wkOffset + 1))} aria-label="Next week" disabled={wkOffset >= 0} style={{ background: "none", border: "none", cursor: wkOffset < 0 ? "pointer" : "default", padding: 2, display: "flex", WebkitTapHighlightColor: "transparent" }}><ChevronRight size={15} color={wkOffset < 0 ? C.faint : "transparent"} /></button>
+          </div>
+          {wkOffset !== 0 && <button onClick={() => setWkOffset(0)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: SANS, fontSize: 11, color: ACC, WebkitTapHighlightColor: "transparent" }}>Back to this week</button>}
+        </div>
+        {wkOffset !== 0 && <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, padding: "0 4px 10px", lineHeight: 1.5 }}>Starting one of these trains it now and logs it today — it does not backdate the session.</div>}
         <DndContext sensors={scheduleSensors} onDragEnd={({ active, over }) => { if (over) swapScheduleDays(Number(active.id.slice(6)), Number(over.id.slice(6))); }} modifiers={[restrictToVerticalAxis]}>
           <div style={{ display: "grid", gap: 10 }}>
             {week.map((d, i) => {
@@ -1888,6 +1975,25 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
     );
   }
 
+  /* ================= SWAP / ADD AN EXERCISE ================= */
+  if (phase === "subpick" && live) {
+    const cur = sessionEx();
+    const title = subTarget?.mode === "swap" ? `Replace ${exName(cur[subTarget.i]?.id)}` : "Add to this session";
+    return (
+      <div>
+        <div style={{ padding: "6px 18px 0" }}>
+          <div style={{ fontFamily: SANS, fontSize: 12, color: AC.a300, background: AC.a900, border: `1px solid ${AC.a800}`, borderRadius: 8, padding: "9px 12px", lineHeight: 1.45 }}>{title} — for today only.</div>
+        </div>
+        <Picker inDay={[]} dayName="Back to workout"
+          onBack={() => { setSubTarget(null); setPhase("active"); }}
+          onToggle={(id) => {
+            if (subTarget?.mode === "swap") swapEx(subTarget.i, id); else addEx(id);
+            setSubTarget(null); setPhase("active");
+          }} />
+      </div>
+    );
+  }
+
   /* ================= PICK ================= */
   if (phase === "pick") {
     const todayAi = assignedIdx(active, new Date());
@@ -1935,11 +2041,14 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
 
   if (!live) return null;
   const day = active.days[live.dayIdx];
+  // Everything below reads the session's list, which is the program's unless this session
+  // was edited.
+  const dayEx = live.exOverride || day.ex;
   const setData = live.setData || {}, done = live.done || {};
   const sessionCount = sessionsFor(history, active.id).length;
   const customWeekLabel = progressionOf(active).weekLabel(active, { sessionCount, program: active });
   const subLine = `${active.name} · ${customWeekLabel || `Week ${programWeek(active)}`} · ${wLabel(live.dayIdx)}`;
-  const totalSets = day.ex.reduce((n, exx) => {
+  const totalSets = dayEx.reduce((n, exx) => {
     const strat = progressionOf(active, exx);
     const specs = strat.getSetSpecs ? strat.getSetSpecs(exx, { lastReadiness: active.lastReadiness, program: active, sessionCount }) : null;
     return n + (specs ? specs.length : setCount(exx));
@@ -1947,13 +2056,13 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
   const doneCount = Object.keys(done).length;
   // the first exercise with a set still unlogged is "current"; it stays expanded and the rest
   // collapse. Tapping a collapsed one overrides that until it is dismissed.
-  const exSetCounts = day.ex.map((exx) => {
+  const exSetCounts = dayEx.map((exx) => {
     const strat = progressionOf(active, exx);
     const specs = strat.getSetSpecs ? strat.getSetSpecs(exx, { lastReadiness: active.lastReadiness, program: active, sessionCount }) : null;
     return specs ? specs.length : setCount(exx);
   });
   const firstOpen = exSetCounts.findIndex((n, ei) => Array.from({ length: n }).some((_, si) => !done[`${ei}-${si}`]));
-  const currentIdx = firstOpen === -1 ? day.ex.length - 1 : firstOpen;
+  const currentIdx = firstOpen === -1 ? dayEx.length - 1 : firstOpen;
   const expandedIdx = expandedEx != null ? expandedEx : currentIdx;
 
   /* ================= REVIEW ================= */
@@ -1983,9 +2092,10 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
       <SessionHeader live={live} label={wLabel(live.dayIdx)} sub={subLine} doneCount={doneCount} totalSets={totalSets}
         onMinimise={() => setPhase("schedule")} menuOpen={menuOpen} setMenuOpen={setMenuOpen}
         onDiscard={() => { setMenuOpen(false); setConfirmDiscard(true); }}
+        onEditEx={() => { setMenuOpen(false); setEditOpen(true); }}
         onRestartTimer={() => setDraft((d) => ({ ...d, startedAt: new Date().toISOString() }))}
         onStartClock={startClock} />
-      {day.ex.map((exx, ei) => {
+      {dayEx.map((exx, ei) => {
         const strategy = progressionOf(active, exx);
         const ctx = { lastReadiness: active.lastReadiness, program: active, sessionCount };
         const rec = strategy.recommend(exx, ctx);
@@ -2124,6 +2234,13 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onReorde
       {restUntil && <RestFooter until={restUntil} onExtend={(ms) => setRestUntil((t) => Math.max(Date.now() + 1000, t + ms))} onSkip={() => setRestUntil(null)} />}
       {detail && <ExerciseDetail exercise={detail} onClose={() => setDetail(null)} />}
       {calcOpen && <PlateCalculator targetKg={calcOpen.initialKg} cable={calcOpen.cable} equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setCalcOpen(null)} />}
+      {editOpen && (
+        <SessionEditSheet dayEx={dayEx}
+          onSwap={(i) => { setEditOpen(false); setSubTarget({ mode: "swap", i }); setPhase("subpick"); }}
+          onAdd={() => { setEditOpen(false); setSubTarget({ mode: "add" }); setPhase("subpick"); }}
+          onRemove={(i) => removeEx(i)}
+          onClose={() => setEditOpen(false)} />
+      )}
     </div>
   );
 }
@@ -2737,6 +2854,52 @@ function PlateCalculator({ targetKg: initialKg, cable, equipment, setEquipment, 
 }
 
 const PICKER_LIMIT = 60;
+/* Editing the session in front of you, not the program behind it.
+   The edited list lives on the draft as `exOverride` and dies with it: swapping an exercise
+   here changes today's workout and leaves the program untouched, which is the only reason
+   this is safe to offer mid-session. Nothing is written back except the sets you log. */
+function SessionEditSheet({ dayEx, onSwap, onRemove, onAdd, onClose }) {
+  const [confirmRemove, setConfirmRemove] = useState(null);
+  const btn = { height: 32, padding: "0 11px", borderRadius: 8, background: "none", fontFamily: SANS, fontSize: 12.5, fontWeight: 500, cursor: "pointer", flexShrink: 0, WebkitTapHighlightColor: "transparent" };
+  return (
+    <div onClick={onClose} style={{ ...sheetScrim, zIndex: 70 }}>
+      <div onClick={(e) => e.stopPropagation()} style={sheetShell}>
+        <div style={grabHandle} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <h2 style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.3 }}>Edit this session</h2>
+          <button onClick={onClose} style={miniRound}><X size={17} /></button>
+        </div>
+        <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub, lineHeight: 1.55, marginBottom: 16 }}>
+          Swap or drop anything you cannot do today. This changes the workout in front of you only — your program keeps its own exercises for next time.
+        </div>
+        {dayEx.map((exx, i) => (
+          <div key={`${exx.id}-${i}`} style={{ padding: "11px 0", borderTop: i === 0 ? "none" : `1px solid ${C.lineSoft}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: SANS, fontSize: 14.5, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{exName(exx.id)}</div>
+                <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, marginTop: 2 }}>{setCount(exx)} set{setCount(exx) === 1 ? "" : "s"}{exx.subbed ? " · swapped in" : ""}</div>
+              </div>
+              <button onClick={() => onSwap(i)} style={{ ...btn, border: `1px solid ${AC.base}`, color: ACC }}>Swap</button>
+              <button onClick={() => setConfirmRemove(confirmRemove === i ? null : i)} disabled={dayEx.length < 2}
+                style={{ ...btn, border: `1px solid ${C.line}`, color: dayEx.length < 2 ? C.faint : C.sub, cursor: dayEx.length < 2 ? "default" : "pointer" }}>Remove</button>
+            </div>
+            {confirmRemove === i && (
+              <div style={{ background: C.redBg, borderRadius: 8, padding: 11, marginTop: 9 }}>
+                <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, lineHeight: 1.5, marginBottom: 9 }}>Drop {exName(exx.id)} from today? Anything you already logged against it goes too.</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => setConfirmRemove(null)} style={{ ...btn, flex: 1, border: `1px solid ${C.line}`, color: C.sub }}>Keep it</button>
+                  <button onClick={() => { setConfirmRemove(null); onRemove(i); }} style={{ ...btn, flex: 1, border: `1px solid ${C.red}`, color: C.red }}>Drop it</button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        <button onClick={onAdd} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, width: "100%", height: 44, marginTop: 14, borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}><Plus size={16} /> Add an exercise</button>
+      </div>
+    </div>
+  );
+}
+
 function Picker({ inDay, onToggle, onBack, dayName }) {
   const [q, setQ] = useState(""); const [equip, setEquip] = useState("All");
   const [detail, setDetail] = useState(null);
