@@ -1653,7 +1653,7 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onDelete
   const [wkOffset, setWkOffset] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [subTarget, setSubTarget] = useState(null); // { mode: "swap" | "add", i }
-  const [confirmRedo, setConfirmRedo] = useState(null); // date key of the row being redone
+  const [viewSession, setViewSession] = useState(null); // a finished session being read back
   const scheduleSensors = useReorderSensors();
   const swapScheduleDays = (dowA, dowB) => {
     if (!active || dowA === dowB) return;
@@ -1962,7 +1962,8 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onDelete
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ width: 40, fontFamily: MONO, fontSize: 11, fontWeight: 700, color: d.isToday ? ACC : C.faint, flexShrink: 0 }}>{WD_LONG[d.dow].slice(0, 3).toUpperCase()}</div>
                   <ScheduleSwapRow dow={d.dow} draggable={isWorkout}>
-                    <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 12, background: C.card, border: `1.5px solid ${border}`, borderRadius: 13, padding: "12px 14px", minHeight: 66 }}>
+                    <div onClick={logged ? () => setViewSession({ session: logged, aidx: d.aidx, past: d.past, key: d.key }) : undefined}
+                      style={{ flex: 1, display: "flex", alignItems: "center", gap: 12, background: C.card, border: `1.5px solid ${border}`, borderRadius: 13, padding: "12px 14px", minHeight: 66, cursor: logged ? "pointer" : "default" }}>
                       <div style={{ width: 44, height: 44, borderRadius: 11, background: iconBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{isWorkout ? <Dumbbell size={20} color={iconColor} /> : <Moon size={19} color={C.faint} />}</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         {isWorkout ? (
@@ -1977,32 +1978,15 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onDelete
                       {isWorkout && !d.done && (
                         <button onClick={() => (d.inProgress ? setPhase("active") : startWorkout(d.aidx, history, d.past ? d.key : null))} onPointerDown={(e) => e.stopPropagation()} style={{ height: 40, padding: "0 15px", borderRadius: 8, border: `1px solid ${d.inProgress || missed ? C.amber : AC.base}`, background: "none", color: d.inProgress || missed ? C.amber : ACC, fontFamily: SANS, fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Play size={14} weight="fill" /> {d.inProgress ? "Resume" : "Start"}</button>
                       )}
-                      {isWorkout && d.done && logged && (
-                        <button onClick={() => setConfirmRedo(confirmRedo === d.key ? null : d.key)} onPointerDown={(e) => e.stopPropagation()}
-                          style={{ height: 36, padding: "0 12px", borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 13, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 5, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><RotateCcw size={14} /> Redo</button>
-                      )}
+                      {/* Tapping the row reads the session back. Nothing destructive lives
+                          out here any more — redo and delete are in that sheet's menu. */}
+                      {logged && <ChevronRight size={17} color={C.faint} style={{ flexShrink: 0 }} />}
                       {!isWorkout && (
                         <button onClick={() => setPhase("pick")} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, color: ACC, fontFamily: SANS, fontSize: 13.5, fontWeight: 600, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}><Plus size={16} strokeWidth={2.5} /> Add</button>
                       )}
                     </div>
                   </ScheduleSwapRow>
                 </div>
-                {/* Deletes the logged session and opens the workout again from scratch. The
-                    weight it already advanced to stays advanced — the patch it applied was
-                    never recorded anywhere, so there is nothing to roll back, and saying so
-                    is better than implying a clean undo. */}
-                {confirmRedo === d.key && logged && (
-                  <div style={{ marginLeft: 50, marginTop: 8, background: C.redBg, borderRadius: 10, padding: 12 }}>
-                    <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, lineHeight: 1.5, marginBottom: 10 }}>
-                      Delete the {(logged.sets || []).length} sets logged for {wLabel(d.aidx)} and start it again? Next session's recommended weights stay where they are.
-                    </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button onClick={() => setConfirmRedo(null)} style={{ flex: 1, height: 38, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 13.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Keep it</button>
-                      <button onClick={() => { setConfirmRedo(null); onDeleteSession(logged); startWorkout(d.aidx, history.filter((x) => x !== logged), d.past ? d.key : null); }}
-                        style={{ flex: 1, height: 38, borderRadius: 8, border: `1px solid ${C.red}`, background: "none", color: C.red, fontFamily: SANS, fontSize: 13.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Delete and redo</button>
-                    </div>
-                  </div>
-                )}
                 </div>
               );
             })}
@@ -2018,6 +2002,12 @@ function Train({ profile, programs, history, draft, setDraft, onFinish, onDelete
           <ChevronRight size={16} color={C.faint} />
         </button>
         {calcOpen && <PlateCalculator targetKg={calcOpen.initialKg} cable={calcOpen.cable} equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setCalcOpen(null)} />}
+        {viewSession && (
+          <CompletedSessionSheet session={viewSession.session} programs={programs} unit={u}
+            onRedo={() => { const v = viewSession; setViewSession(null); onDeleteSession(v.session); startWorkout(v.aidx, history.filter((x) => x !== v.session), v.past ? v.key : null); }}
+            onDelete={() => { onDeleteSession(viewSession.session); setViewSession(null); }}
+            onClose={() => setViewSession(null)} />
+        )}
       </div>
     );
   }
@@ -2905,6 +2895,97 @@ const PICKER_LIMIT = 60;
    The edited list lives on the draft as `exOverride` and dies with it: swapping an exercise
    here changes today's workout and leaves the program untouched, which is the only reason
    this is safe to offer mid-session. Nothing is written back except the sets you log. */
+/* A finished session, read back. Tapping a completed day used to offer nothing but Redo —
+   a destructive action given the most prominent spot on the row, and no way at all to see
+   what you had lifted. Looking is the common case, so it gets the tap; redo and delete sit
+   behind the menu, where the active session already keeps its own. */
+function CompletedSessionSheet({ session, programs, unit, onRedo, onDelete, onClose }) {
+  const [menu, setMenu] = useState(false);
+  const [confirm, setConfirm] = useState(null); // "redo" | "delete"
+  const u = unit || "kg";
+  const prog = (programs || []).find((x) => x.id === session.programId);
+  const byEx = setsByExercise(session.sets);
+  const vol = (session.sets || []).reduce((n, x) => n + (x.w || 0) * (x.reps || 0), 0);
+  const dt = startOfDay(new Date(session.date));
+  const madeUp = session.slotKey && session.slotKey !== session.date ? startOfDay(new Date(session.slotKey)) : null;
+  const item = { display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 12px", borderRadius: 7, border: "none", background: "none", cursor: "pointer", fontFamily: SANS, fontSize: 14, WebkitTapHighlightColor: "transparent" };
+  const cbtn = { flex: 1, height: 38, borderRadius: 8, background: "none", fontFamily: SANS, fontSize: 13.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" };
+  return (
+    <div onClick={onClose} style={{ ...sheetScrim, zIndex: 70 }}>
+      <div onClick={(e) => e.stopPropagation()} style={sheetShell}>
+        <div style={grabHandle} />
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 4 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <Check size={15} color={C.green} strokeWidth={3} />
+              <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: C.green }}>Complete</span>
+            </div>
+            <h2 style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, margin: "5px 0 0", letterSpacing: -0.3 }}>{session.dayName}</h2>
+            <div style={{ fontFamily: SANS, fontSize: 12.5, color: NEU.n600, marginTop: 3 }}>
+              {WD_LONG[dt.getDay()]} {dt.getDate()} {MON[dt.getMonth()]}{prog ? ` · ${prog.name}` : ""}
+            </div>
+            {madeUp && <div style={{ fontFamily: SANS, fontSize: 11.5, color: AC.a300, marginTop: 3 }}>Making up {WD_LONG[madeUp.getDay()]} {madeUp.getDate()} {MON[madeUp.getMonth()]}</div>}
+          </div>
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <button onClick={() => setMenu(!menu)} style={miniRound} aria-label="Session options"><DotsThree size={20} weight="bold" /></button>
+            {menu && (<>
+              <div onClick={() => setMenu(false)} style={{ position: "fixed", inset: 0, zIndex: 79 }} />
+              <div style={{ position: "absolute", right: 0, top: 40, background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, boxShadow: C.shadowMd, padding: 4, zIndex: 80, minWidth: 176 }}>
+                <button onClick={() => { setMenu(false); setConfirm("redo"); }} style={{ ...item, color: C.ink }}><RotateCcw size={15} /> Redo workout</button>
+                <div style={{ height: 1, background: C.lineSoft, margin: "4px 8px" }} />
+                <button onClick={() => { setMenu(false); setConfirm("delete"); }} style={{ ...item, color: C.red }}><Trash2 size={15} /> Delete session</button>
+              </div>
+            </>)}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, margin: "14px 0 6px" }}>
+          {[{ k: "Sets", v: String((session.sets || []).length) }, { k: "Exercises", v: String(byEx.length) }, { k: "Volume", v: `${kFmt(fmtW(vol, u))} ${u}` }].map((t) => (
+            <div key={t.k} style={{ flex: 1, background: C.page, borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontFamily: SANS, fontSize: 9, fontWeight: 500, letterSpacing: 1.1, textTransform: "uppercase", color: NEU.n600, whiteSpace: "nowrap" }}>{t.k}</div>
+              <div style={{ fontFamily: SANS, fontSize: 18, fontWeight: 500, color: C.ink, marginTop: 4, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{t.v}</div>
+            </div>
+          ))}
+        </div>
+
+        {byEx.map(({ id, sets }) => (
+          <div key={id} style={{ padding: "11px 0", borderTop: `1px solid ${C.lineSoft}` }}>
+            <div style={{ fontFamily: SANS, fontSize: 14, color: C.ink, marginBottom: 6 }}>{exName(id)}</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {sets.map((x, i) => {
+                // Only traffic-light ratings carry a feel worth replaying. "logged" and
+                // hit/miss are not in RIR, so they quietly draw nothing.
+                const felt = RIR[x.rir];
+                return (
+                  <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: C.page, borderRadius: 7, padding: "5px 9px", fontFamily: MONO, fontSize: 12, color: C.sub, fontVariantNumeric: "tabular-nums" }}>
+                    {x.w > 0 ? `${wStr(x.w, u)}×${x.reps}` : `${x.reps}`}
+                    {felt && <span title={`Felt ${felt.label.toLowerCase()}`} style={{ width: 6, height: 6, borderRadius: 3, background: felt.c }} />}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        {confirm && (
+          <div style={{ background: C.redBg, borderRadius: 8, padding: 12, marginTop: 14 }}>
+            <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.ink, lineHeight: 1.5, marginBottom: 10 }}>
+              {confirm === "redo"
+                ? `Delete these ${(session.sets || []).length} sets and start ${session.dayName} again? Next session's recommended weights stay where they are.`
+                : "Delete this session for good? Its sets leave your history and your totals. The weights it already advanced stay where they are."}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setConfirm(null)} style={{ ...cbtn, border: `1px solid ${C.line}`, color: C.sub }}>Keep it</button>
+              <button onClick={() => (confirm === "redo" ? onRedo() : onDelete())} style={{ ...cbtn, border: `1px solid ${C.red}`, color: C.red }}>{confirm === "redo" ? "Delete and redo" : "Delete"}</button>
+            </div>
+          </div>
+        )}
+        {!confirm && <button onClick={onClose} style={{ width: "100%", height: 44, marginTop: 16, borderRadius: 8, border: `1px solid ${C.line}`, background: "none", color: C.sub, fontFamily: SANS, fontSize: 14.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Close</button>}
+      </div>
+    </div>
+  );
+}
+
 function SessionEditSheet({ dayEx, onSwap, onRemove, onAdd, onClose }) {
   const [confirmRemove, setConfirmRemove] = useState(null);
   const btn = { height: 32, padding: "0 11px", borderRadius: 8, background: "none", fontFamily: SANS, fontSize: 12.5, fontWeight: 500, cursor: "pointer", flexShrink: 0, WebkitTapHighlightColor: "transparent" };
