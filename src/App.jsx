@@ -31,7 +31,7 @@ import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, useDra
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
-import { progressionOf } from "./lib/progression";
+import { progressionOf, PROGRESS_SPEEDS, speedOf, epley1RM } from "./lib/progression";
 import { calcPlateLoad, cablePinKg, DEFAULT_EQUIPMENT } from "./lib/plates";
 import { supabase, syncConfigured } from "./lib/supabase";
 import { syncNow, push as pushSync, touchKey } from "./lib/sync";
@@ -2378,7 +2378,7 @@ function CatalogCard({ template, added, onOpen }) {
   );
 }
 const PROGRAM_LIBRARY_LIMIT = 20;
-function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
+function Programs({ programs, setPrograms, history, maxes, setMaxes, unit, go }) {
   const [openId, setOpenId] = useState(null);
   const [info, setInfo] = useState(null);
   const [q, setQ] = useState("");
@@ -2411,7 +2411,7 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
     const p = programs.find((x) => x.id === openId);
     if (!p) { setOpenId(null); return null; }
     const otherActive = programs.find((x) => x.active && x.id !== openId) || null;
-    return <ProgramDetail program={p} activeElsewhere={otherActive} maxes={maxes} setMaxes={setMaxes} history={history} onBack={() => setOpenId(null)} onChange={(np) => setPrograms(programs.map((x) => x.id === openId ? np : x))} onDelete={() => { setPrograms(programs.filter((x) => x.id !== openId)); setOpenId(null); }} onStart={(sd, per) => startProgram(openId, sd, per)} onPause={() => pauseProgram(openId)} onResume={() => resumeProgram(openId)} onComplete={() => completeProgram(openId)} onRestart={() => restartProgram(openId)} />;
+    return <ProgramDetail program={p} activeElsewhere={otherActive} maxes={maxes} setMaxes={setMaxes} history={history} unit={unit} onBack={() => setOpenId(null)} onChange={(np) => setPrograms(programs.map((x) => x.id === openId ? np : x))} onDelete={() => { setPrograms(programs.filter((x) => x.id !== openId)); setOpenId(null); }} onStart={(sd, per) => startProgram(openId, sd, per)} onPause={() => pauseProgram(openId)} onResume={() => resumeProgram(openId)} onComplete={() => completeProgram(openId)} onRestart={() => restartProgram(openId)} />;
   }
 
   const tagOptions = ["All", ...Array.from(new Set(PROGRAM_CATALOG.flatMap((p) => p.tags))).sort()];
@@ -2493,7 +2493,8 @@ function Programs({ programs, setPrograms, history, maxes, setMaxes, go }) {
 }
 
 const LIFT_LABELS = { squat: "Squat", bench: "Bench Press", deadlift: "Deadlift", ohp: "Overhead Press" };
-function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onBack, onChange, onDelete, onStart, onPause, onResume, onComplete, onRestart }) {
+function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, unit, onBack, onChange, onDelete, onStart, onPause, onResume, onComplete, onRestart }) {
+  const [calcFor, setCalcFor] = useState(null); // lift key whose max the calculator is filling
   const [picker, setPicker] = useState(null);
   const [starting, setStarting] = useState(false);
   const [settingMaxes, setSettingMaxes] = useState(false);
@@ -2560,7 +2561,12 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
       {neededLiftKeys.map((lk) => (
         <div key={lk} style={{ marginBottom: 12 }}>
           <label style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6, display: "block" }}>{LIFT_LABELS[lk] || lk} {strategy.maxesInputLabel || "training max"} (kg)</label>
-          <input inputMode="decimal" value={maxInputs[lk] ?? ""} onChange={(e) => setMaxInputs((m) => ({ ...m, [lk]: e.target.value }))} placeholder="e.g. 100" style={{ width: "100%", height: 48, borderRadius: 11, border: `1.5px solid ${C.line}`, background: C.card, padding: "0 14px", fontFamily: MONO, fontSize: 16, color: C.ink, outline: "none" }} />
+          <div style={{ display: "flex", gap: 8 }}>
+            <input inputMode="decimal" value={maxInputs[lk] ?? ""} onChange={(e) => setMaxInputs((m) => ({ ...m, [lk]: e.target.value }))} placeholder="e.g. 100" style={{ flex: 1, minWidth: 0, height: 48, borderRadius: 11, border: `1.5px solid ${C.line}`, background: C.card, padding: "0 14px", fontFamily: MONO, fontSize: 16, color: C.ink, outline: "none" }} />
+            {/* Right where the number is needed. Nobody knows their 5RM off the top of their head. */}
+            <button onClick={() => setCalcFor(lk)} aria-label={`Work out your ${LIFT_LABELS[lk] || lk} max`}
+              style={{ width: 48, height: 48, flexShrink: 0, borderRadius: 11, border: `1.5px solid ${C.line}`, background: C.card, color: C.ink, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}><Calculator size={17} /></button>
+          </div>
         </div>
       ))}
       <BigButton tone="acc" disabled={neededLiftKeys.some((lk) => !(parseFloat(maxInputs[lk]) > 0))} onClick={() => { setSettingMaxes(false); setStarting(true); }}>Continue</BigButton>
@@ -2605,6 +2611,25 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
         {PERIODIZATION_INFO[program.progressionType] && <button onClick={() => setProgInfo(true)} style={{ ...miniRound, border: "none", background: AI_BG }}><Sparkles size={18} color={AI_ACC} /></button>}
         <button onClick={() => setInfo(true)} style={{ ...miniRound, border: "none", background: C.page }}><Info size={18} color={C.sub} /></button>
       </div>
+
+      {/* How fast the engine is allowed to take what you earn. Sits here rather than in the
+          start wizard so it can be changed mid-program, which is when most people discover
+          the standard jumps are too much. */}
+      {(() => {
+        const sp = speedOf(program);
+        const cur = PROGRESS_SPEEDS.find((x) => x.v === sp) || PROGRESS_SPEEDS[0];
+        return (
+          <Card style={{ padding: "14px 16px 16px", marginBottom: 12 }}>
+            <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink }}>Progression speed</div>
+            <div style={{ fontFamily: SANS, fontSize: 12, color: C.sub, margin: "3px 0 11px" }}>How quickly this program adds weight. Change it whenever you like.</div>
+            <Segmented options={PROGRESS_SPEEDS.map((x) => x.label)} value={cur.label}
+              onChange={(label) => onChange({ ...program, progressSpeed: (PROGRESS_SPEEDS.find((x) => x.label === label) || PROGRESS_SPEEDS[0]).v })} />
+            <div style={{ fontFamily: SANS, fontSize: 12, color: NEU.n600, marginTop: 10, lineHeight: 1.5 }}>
+              {cur.blurb}{sp < 1 ? " A lift that normally adds 5kg moves 2.5kg each time; one that adds 2.5kg moves every other session instead, since no pair of plates makes 1.25kg." : ""}
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* program length + science warning */}
       <Card style={{ padding: "12px 16px 14px", marginBottom: 12 }}>
@@ -2693,6 +2718,11 @@ function ProgramDetail({ program, activeElsewhere, maxes, setMaxes, history, onB
       {info && <InfoModal styleKey={program.style || "custom"} onClose={() => setInfo(false)} />}
       {progInfo && <ProgressionInfoModal template={program} onClose={() => setProgInfo(false)} />}
       {detail && <ExerciseDetail exercise={detail} onClose={() => setDetail(null)} />}
+      {calcFor && (
+        <MaxCalculatorSheet unit={unit} forLift={(LIFT_LABELS[calcFor] || calcFor).toLowerCase()}
+          onUse={(v) => { setMaxInputs((m) => ({ ...m, [calcFor]: String(v) })); setCalcFor(null); }}
+          onClose={() => setCalcFor(null)} />
+      )}
     </div>
   );
 }
@@ -2746,6 +2776,88 @@ function ExerciseDetail({ exercise, inDay, onToggle, onClose }) {
    PLATE CALCULATOR
 ================================================================ */
 const PLATE_SHADES = ["#F3F5FE", "#E4E7F5", "#CFD3E5", "#B2B6CA", "#9397AB", "#B5ABFC", "#968AE0"];
+
+/* Estimating a max from a set you have actually done, rather than working up to a true
+   single. Two formulas, not one: they disagree by a few percent and showing the spread is
+   more honest than a single number carrying false precision. Epley reads high on low reps,
+   Brzycki falls apart above about ten — which is also why the input is capped there. */
+const brzycki1RM = (w, reps) => (reps >= 37 ? 0 : (w * 36) / (37 - reps));
+// Epley inverted, except at a single. Run backwards from one rep the formula returns 97% of
+// the max rather than the max itself, because it was only ever fitted above one rep — so a
+// one-rep max is simply the max, and the table stops contradicting its own headline.
+const nRMfromOne = (oneRM, n) => (n <= 1 ? oneRM : oneRM / (1 + n / 30));
+
+function MaxCalculatorSheet({ unit, forLift, onUse, onClose }) {
+  const u = unit || "kg";
+  const [w, setW] = useState("");
+  const [reps, setReps] = useState("5");
+  const kg = (parseFloat(w) || 0) * (u === "lb" ? 1 / KG_TO_LB : 1);
+  const r = Math.min(12, Math.max(1, parseInt(reps) || 0));
+  const ok = kg > 0 && r >= 1;
+  const e = ok ? epley1RM(kg, r) : 0;
+  const bz = ok ? brzycki1RM(kg, r) : 0;
+  const lo = Math.min(e, bz), hi = Math.max(e, bz);
+  const one = (e + bz) / 2;
+  const five = nRMfromOne(one, 5);
+  const field = { width: "100%", height: 48, borderRadius: 11, border: `1.5px solid ${C.line}`, background: C.page, padding: "0 14px", fontFamily: MONO, fontSize: 17, color: C.ink, outline: "none" };
+  const big = { fontFamily: SANS, fontSize: 26, fontWeight: 500, color: C.ink, letterSpacing: -0.5, fontVariantNumeric: "tabular-nums" };
+  return (
+    <div onClick={onClose} style={{ ...sheetScrim, zIndex: 75 }}>
+      <div onClick={(ev) => ev.stopPropagation()} style={sheetShell}>
+        <div style={grabHandle} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <h2 style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, color: C.ink, margin: 0, letterSpacing: -0.3 }}>Work out your max</h2>
+          <button onClick={onClose} style={miniRound}><X size={17} /></button>
+        </div>
+        <div style={{ fontFamily: SANS, fontSize: 12.5, color: C.sub, lineHeight: 1.55, marginBottom: 16 }}>
+          Put in a hard set you have actually done — one you stopped at or near failure. Three to eight reps gives the best estimate; past ten the maths drifts badly.
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ ...finLabel }}>Weight ({u})</div>
+            <input inputMode="decimal" value={w} onChange={(ev) => setW(ev.target.value)} placeholder="e.g. 100" style={field} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ ...finLabel }}>Reps</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <MiniStep onClick={() => setReps(String(Math.max(1, r - 1)))}><Minus size={15} strokeWidth={2.5} /></MiniStep>
+              <input inputMode="numeric" value={reps} onChange={(ev) => setReps(ev.target.value)} style={{ ...field, textAlign: "center", padding: 0 }} />
+              <MiniStep onClick={() => setReps(String(Math.min(12, r + 1)))}><Plus size={15} strokeWidth={2.5} /></MiniStep>
+            </div>
+          </div>
+        </div>
+
+        {!ok ? (
+          <div style={{ background: C.page, borderRadius: 10, padding: 18, textAlign: "center", fontFamily: SANS, fontSize: 13, color: NEU.n600 }}>Enter a weight to see your estimate.</div>
+        ) : (<>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[{ k: "Estimated 1RM", v: one, acc: true }, { k: "Estimated 5RM", v: five }].map((t) => (
+              <div key={t.k} style={{ flex: 1, background: C.page, borderRadius: 10, padding: "13px 14px" }}>
+                <div style={{ fontFamily: SANS, fontSize: 9, fontWeight: 500, letterSpacing: 1.1, textTransform: "uppercase", color: NEU.n600, whiteSpace: "nowrap" }}>{t.k}</div>
+                <div style={{ ...big, color: t.acc ? AC.a300 : C.ink, marginTop: 5 }}>{wStr(t.v, u)} <span style={{ fontSize: 13, color: NEU.n600 }}>{u}</span></div>
+                {onUse && <button onClick={() => onUse(Math.round(fmtW(t.v, u) * 10) / 10)} style={{ marginTop: 9, height: 32, width: "100%", borderRadius: 8, border: `1px solid ${AC.base}`, background: "none", color: ACC, fontFamily: SANS, fontSize: 12.5, fontWeight: 500, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>Use this</button>}
+              </div>
+            ))}
+          </div>
+          <div style={{ fontFamily: SANS, fontSize: 11.5, color: NEU.n600, margin: "10px 2px 16px", lineHeight: 1.5 }}>
+            The two standard formulas put your single between {wStr(lo, u)} and {wStr(hi, u)} {u}. Treat it as a guide, not a number you have proven{forLift ? ` — and for ${forLift}, start at the low end` : ""}.
+          </div>
+
+          <div style={finLabel}>Training percentages</div>
+          <div style={{ background: C.page, borderRadius: 10, padding: "4px 13px" }}>
+            {[1, 2, 3, 5, 8, 10].map((n, i) => (
+              <div key={n} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderTop: i === 0 ? "none" : `1px solid ${C.lineSoft}` }}>
+                <span style={{ fontFamily: SANS, fontSize: 13.5, color: C.ink }}>{n} rep max</span>
+                <span style={{ fontFamily: MONO, fontSize: 13, color: C.sub, fontVariantNumeric: "tabular-nums" }}>{wStr(nRMfromOne(one, n), u)} {u} <span style={{ color: NEU.n600 }}>· {Math.round((nRMfromOne(one, n) / one) * 100)}%</span></span>
+              </div>
+            ))}
+          </div>
+        </>)}
+      </div>
+    </div>
+  );
+}
 
 function EquipmentManager({ equipment, setEquipment, unit, onClose }) {
   const u = unit;
@@ -3137,6 +3249,7 @@ function FriendsSheet({ friendsApi, habits, onClose }) {
 
 function SettingsSheet({ profile, setProfile, programs, history, weightLog, onReset, equipment, setEquipment, fin, setFin, sync, friendsApi, habits, onClose }) {
   const [view, setView] = useState("main");
+  const [calcOpen, setCalcOpen] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [editingEquip, setEditingEquip] = useState(false);
   const [snaps] = useState(() => readSnaps());
@@ -3306,6 +3419,18 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
         )}
       </Card>
 
+      <SectionLabel>Tools</SectionLabel>
+      <Card style={{ padding: 16, marginBottom: 16 }}>
+        <button onClick={() => setCalcOpen(true)} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+          <Calculator size={19} color={C.sub} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: C.ink }}>Work out your max</div>
+            <div style={{ fontFamily: SANS, fontSize: 12, color: C.sub, marginTop: 2 }}>Estimate a 1RM or 5RM from a set you have done.</div>
+          </div>
+          <ChevronRight size={16} color={C.faint} />
+        </button>
+      </Card>
+
       <SectionLabel>Data</SectionLabel>
       <Card style={{ padding: confirmReset ? 16 : "4px 16px", marginBottom: 16 }}>
         {confirmReset ? (
@@ -3326,6 +3451,7 @@ function SettingsSheet({ profile, setProfile, programs, history, weightLog, onRe
         </>)}
         {editingEquip && <EquipmentManager equipment={equipment} setEquipment={setEquipment} unit={u} onClose={() => setEditingEquip(false)} />}
         {friendsOpen && <FriendsSheet friendsApi={friendsApi} habits={habits} onClose={() => setFriendsOpen(false)} />}
+        {calcOpen && <MaxCalculatorSheet unit={u} onClose={() => setCalcOpen(false)} />}
       </div>
     </div>
   );
@@ -4448,7 +4574,7 @@ export default function App() {
           {tab === "read" && <Read read={read} setRead={setRead} friendsApi={friendsApi} />}
           {tab === "finance" && <Finance fin={fin} setFin={setFin} onSettings={openSettings} />}
           {tab === "habits" && <Habits habits={habits} setHabits={setHabits} friendsApi={friendsApi} onHistory={() => setHistoryOpen(true)} />}
-          {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} go={setTab} />}
+          {tab === "programs" && <Programs programs={programs} setPrograms={setPrograms} history={history} maxes={maxes} setMaxes={setMaxes} unit={profile.unit} go={setTab} />}
         </div>
         <div style={{ flexShrink: 0, background: "rgba(22,24,38,0.92)", backdropFilter: "blur(12px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "8px 8px max(22px, env(safe-area-inset-bottom))" }}>
           {PILLARS.map((p) => { const on = navId === p.id, Icon = p.Icon; return (

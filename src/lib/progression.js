@@ -1,5 +1,34 @@
+/* ===== progression speed =====
+   One dial, shared by every engine: how fast earned weight is actually taken.
+
+   Half speed does NOT halve the increment. The smallest change a pair of plates can make is
+   2.5kg, so halving a 2.5kg lift would ask for 1.25kg — unloadable, and it would silently do
+   nothing on exactly the lifts most people want to slow down. Instead the scaled increment
+   accumulates and is spent whenever it clears a loadable step. A 5kg lift at half speed rises
+   2.5kg every session; a 2.5kg lift rises 2.5kg every other session. Both are exactly half
+   rate, and both land on the bar.
+
+   At speed 1 every path below is arithmetically identical to what it was, so nothing changes
+   for a program that never touches this. */
+const SPEED_GRID = 2.5;
+export const PROGRESS_SPEEDS = [
+  { v: 1, label: "Standard", blurb: "The program's own increments, as written." },
+  { v: 0.5, label: "Half speed", blurb: "Half the weight gain over time. Better if the standard jumps are outrunning your recovery." },
+];
+export const speedOf = (program) => { const n = Number(program?.progressSpeed); return n > 0 && n < 1 ? n : 1; };
+const gridFloor = (v) => Math.floor((v + 1e-9) / SPEED_GRID) * SPEED_GRID;
+// What to actually add now, and what is left over for next time.
+const scaleStep = (inc, speed, carry = 0) => {
+  if (speed === 1) return { take: inc, carry: 0 };
+  const pot = (carry || 0) + inc * speed;
+  const take = gridFloor(pot);
+  return { take, carry: Math.round((pot - take) * 1000) / 1000 };
+};
+const speedTag = (program) => (speedOf(program) < 1 ? " · half speed" : "");
+
 /* ===== rir strategy: reps-in-reserve auto-regulation (today's only progression system) ===== */
 const round5 = (v) => Math.round(v / 2.5) * 2.5;
+const RIR_STEP_KG = 2.5;
 
 function recommendRir(last, lastReadiness, todayReadiness) {
   const BAND = "8–12";
@@ -8,7 +37,15 @@ function recommendRir(last, lastReadiness, todayReadiness) {
   if (last.w === 0)
     return { w: 0, band: `${last.reps + 1}`, dir: "up", action: "Add a rep", note: "Bodyweight — chase one more clean rep.", lastRir: last.rir };
   let out;
-  if (last.rir === "green") out = { w: round5(last.w + 2.5), band: BAND, dir: "up", action: "Increase weight", note: "You had 3+ reps in reserve — add load, reps drop back toward 8.", lastRir: last.rir };
+  // nextW is worked out when the session is saved, because that is where the carried
+  // remainder lives. Sessions logged before speeds existed have none, so they fall back to
+  // the full step and read exactly as they always did.
+  if (last.rir === "green") {
+    const nw = last.nextW ?? round5(last.w + RIR_STEP_KG);
+    out = nw > last.w
+      ? { w: nw, band: BAND, dir: "up", action: "Increase weight", note: "You had 3+ reps in reserve — add load, reps drop back toward 8.", lastRir: last.rir }
+      : { w: last.w, band: BAND, dir: "hold", action: "Hold, build the step", note: "You had reps left, but at half speed this lift rises every other time — same weight, bank it.", lastRir: last.rir };
+  }
   else if (last.rir === "amber") out = { w: last.w, band: BAND, dir: "hold", action: "Hold, add a rep", note: "Right in the 8–12 zone — same weight, earn one more rep.", lastRir: last.rir };
   else {
     if (lastReadiness === "tired") out = { w: last.w, band: BAND, dir: "hold", action: "Hold", note: "Hit failure, but you trained tired — repeat before adding load.", lastRir: last.rir };
@@ -26,12 +63,18 @@ const rir = {
   recommend(exx, { lastReadiness, todayReadiness = null } = {}) {
     return recommendRir(exx.last, lastReadiness, todayReadiness);
   },
-  finishExercise(exx, loggedSets, { isBodyweight } = {}) {
+  finishExercise(exx, loggedSets, { isBodyweight, program } = {}) {
     if (!loggedSets.length) return null;
     const last = loggedSets[loggedSets.length - 1];
     const wLast = last.w || (isBodyweight ? 0 : (exx.last?.w || 0));
     const repsLast = last.reps || exx.last?.reps || 10;
-    return { last: { w: wLast, reps: repsLast, rir: last.rating, logged: true } };
+    const patch = { last: { w: wLast, reps: repsLast, rir: last.rating, logged: true } };
+    if (last.rating === "green" && wLast > 0) {
+      const { take, carry } = scaleStep(RIR_STEP_KG, speedOf(program), exx.carryKg);
+      patch.last.nextW = round5(wLast + take);
+      patch.carryKg = carry;
+    }
+    return patch;
   },
   weekLabel() {
     return null;
@@ -57,8 +100,12 @@ const linear = {
     if (last.w === 0)
       return { w: 0, dir: "up", action: "Add a rep", note: `Bodyweight — chase ${targetReps}+ clean reps.` };
     const inc = exx.incrementKg ?? cfg.incrementKg ?? 2.5;
-    if (last.hit)
-      return { w: round5(last.w + inc), dir: "up", action: "Add weight", note: `Hit ${targetReps} reps last time — add ${inc}kg.` };
+    if (last.hit) {
+      const nw = last.nextW ?? round5(last.w + inc);
+      return nw > last.w
+        ? { w: nw, dir: "up", action: "Add weight", note: `Hit ${targetReps} reps last time — add ${round5(nw - last.w)}kg.` }
+        : { w: last.w, dir: "hold", action: "Repeat weight", note: `Hit it last time, but at half speed this lift rises every other session — same weight again.` };
+    }
     const failsToDeload = cfg.failsToDeload ?? 3;
     const missStreak = last.missStreak || 0;
     if (missStreak >= failsToDeload) {
@@ -67,14 +114,21 @@ const linear = {
     }
     return { w: last.w, dir: "hold", action: "Repeat weight", note: "Missed last time — same weight, try again." };
   },
-  finishExercise(exx, loggedSets, { isBodyweight } = {}) {
+  finishExercise(exx, loggedSets, { isBodyweight, program } = {}) {
     if (!loggedSets.length) return null;
     const last = loggedSets[loggedSets.length - 1];
     const wLast = last.w || (isBodyweight ? 0 : (exx.last?.w || 0));
     const repsLast = last.reps || exx.last?.reps || 5;
     const hit = last.rating === "hit";
     const missStreak = hit ? 0 : (exx.last?.missStreak || 0) + 1;
-    return { last: { w: wLast, reps: repsLast, hit, missStreak, logged: true } };
+    const patch = { last: { w: wLast, reps: repsLast, hit, missStreak, logged: true } };
+    if (hit && wLast > 0) {
+      const inc = exx.incrementKg ?? program?.linearConfig?.incrementKg ?? 2.5;
+      const { take, carry } = scaleStep(inc, speedOf(program), exx.carryKg);
+      patch.last.nextW = round5(wLast + take);
+      patch.carryKg = carry;
+    }
+    return patch;
   },
   weekLabel() {
     return null;
@@ -145,13 +199,16 @@ const nsuns = {
     return NSUNS_T1_TABLES[exx.t1Variant] || NSUNS_T1_TABLES.benchLight;
   },
   effectiveTM(exx, ctx) {
-    return seedTM(exx, ctx) + weekIndexFor(ctx) * increment(exx);
+    // The rise is cumulative and derived, never stored, so flooring the running total to the
+    // plate grid gives the carry for free: at half speed a 2.5kg lift simply holds on the
+    // odd weeks and steps up on the even ones.
+    return seedTM(exx, ctx) + gridFloor(weekIndexFor(ctx) * increment(exx) * speedOf(ctx.program));
   },
   weightForSpec,
   recommend(exx, ctx) {
     const tm = this.effectiveTM(exx, ctx);
     if (!tm) return { first: true, w: null, dir: "hold", action: "Set your training max", note: "Enter a training max for this lift in Profile or when you start the program." };
-    return { first: false, w: tm, dir: "up", action: `Training max ${tm}kg`, note: `Week ${weekIndexFor(ctx) + 1} — increases ${increment(exx)}kg every week on this lift.` };
+    return { first: false, w: tm, dir: "up", action: `Training max ${tm}kg`, note: `Week ${weekIndexFor(ctx) + 1} — increases ${increment(exx) * speedOf(ctx.program)}kg a week on this lift${speedTag(ctx.program)}.` };
   },
   finishExercise(exx, loggedSets) {
     if (!loggedSets.length) return null;
@@ -183,14 +240,14 @@ const wave531 = {
   },
   effectiveTM(exx, ctx) {
     const cycle = Math.floor(weekIndexFor(ctx) / 4);
-    return seedTM(exx, ctx) + cycle * increment(exx);
+    return seedTM(exx, ctx) + gridFloor(cycle * increment(exx) * speedOf(ctx.program));
   },
   weightForSpec,
   recommend(exx, ctx) {
     const tm = this.effectiveTM(exx, ctx);
     const waveWeek = weekIndexFor(ctx) % 4;
     if (!tm) return { first: true, w: null, dir: "hold", action: "Set your training max", note: "Enter a training max for this lift in Profile or when you start the program." };
-    return { first: false, w: tm, dir: "up", action: `Training max ${tm}kg`, note: `${WAVE_LABEL[waveWeek]} — the max goes up ${increment(exx)}kg at the start of every new 4-week wave.` };
+    return { first: false, w: tm, dir: "up", action: `Training max ${tm}kg`, note: `${WAVE_LABEL[waveWeek]} — the max goes up ${increment(exx) * speedOf(ctx.program)}kg each new 4-week wave${speedTag(ctx.program)}.` };
   },
   finishExercise(exx, loggedSets) {
     if (!loggedSets.length) return null;
@@ -261,15 +318,27 @@ const gzclp = {
   weightForSpec(tm) {
     return round5(tm);
   },
-  recommend(exx) {
+  recommend(exx, ctx) {
     const w = gzclpWeight(exx);
     if (!w) return { first: true, w: null, dir: "hold", action: "First session", note: "Enter the weight you use — it becomes your stage 1 starting point." };
     const stage = gzclpStage(exx);
-    if (exx.tier === "T3") return { first: false, w, dir: "up", action: `${w}kg`, note: `3×${T3_FLOOR_REPS}+ — add ${T3_INCREMENT_KG}kg once your last set hits ${T3_BONUS_REPS}+ reps.` };
+    const speed = speedOf(ctx?.program);
+    // What the NEXT success actually adds, carried remainder included, rather than the
+    // program's nominal increment — at half speed those are not the same number.
+    const nextAdd = (inc) => scaleStep(inc, speed, exx.periodization?.carryKg).take;
+    if (exx.tier === "T3") {
+      const add = nextAdd(T3_INCREMENT_KG);
+      return { first: false, w, dir: "up", action: `${w}kg`, note: add > 0
+        ? `3×${T3_FLOOR_REPS}+ — add ${add}kg once your last set hits ${T3_BONUS_REPS}+ reps${speedTag(ctx?.program)}.`
+        : `3×${T3_FLOOR_REPS}+ — at half speed this one holds through the next ${T3_BONUS_REPS}+ set and steps up on the one after.` };
+    }
     const label = exx.tier === "T2" ? T2_LABEL[stage - 1] : T1_LABEL[stage - 1];
-    return { first: false, w, dir: "up", action: `${w}kg · Stage ${stage}`, note: `${label} — hit every rep and next session adds ${increment(exx)}kg. Miss and it moves to the next stage.` };
+    const add = nextAdd(increment(exx));
+    return { first: false, w, dir: "up", action: `${w}kg · Stage ${stage}`, note: add > 0
+      ? `${label} — hit every rep and next session adds ${add}kg${speedTag(ctx?.program)}. Miss and it moves to the next stage.`
+      : `${label} — hit every rep and the weight holds this time, stepping up next session at half speed. Miss and it moves to the next stage.` };
   },
-  finishExercise(exx, loggedSets) {
+  finishExercise(exx, loggedSets, { program } = {}) {
     if (!loggedSets.length) return null;
     const last = loggedSets[loggedSets.length - 1];
     if (!exx.periodization?.weight) {
@@ -279,7 +348,10 @@ const gzclp = {
     }
     const stage = gzclpStage(exx);
     const w = gzclpWeight(exx);
+    const speed = speedOf(program);
+    const carry0 = exx.periodization?.carryKg || 0;
     const inc = increment(exx);
+    let carry2 = carry0;
     const cycleStart = exx.periodization?.cycleStartWeight ?? w;
     let success;
     if (exx.tier === "T2") success = loggedSets.every((s) => s.reps >= T2_STAGES[stage - 1].reps);
@@ -287,13 +359,19 @@ const gzclp = {
     else success = last.reps >= T1_STAGES[stage - 1].reps;
 
     let stage2, weight2, cycleStart2 = cycleStart;
-    if (exx.tier === "T3") { stage2 = stage; weight2 = success ? round5(w + T3_INCREMENT_KG) : w; }
-    else if (success) { stage2 = stage; weight2 = round5(w + inc); }
+    // A stage change or a cycle restart is not an earned rise, so it never spends the carry;
+    // the remainder stays banked against the next genuine increase.
+    if (exx.tier === "T3") {
+      if (success) { const st = scaleStep(T3_INCREMENT_KG, speed, carry0); weight2 = round5(w + st.take); carry2 = st.carry; }
+      else weight2 = w;
+      stage2 = stage;
+    }
+    else if (success) { const st = scaleStep(inc, speed, carry0); stage2 = stage; weight2 = round5(w + st.take); carry2 = st.carry; }
     else if (stage < 3) { stage2 = stage + 1; weight2 = w; }
     else if (exx.tier === "T2") { stage2 = 1; weight2 = round5(cycleStart + T2_CYCLE_RESTART_KG); cycleStart2 = weight2; }
     else { stage2 = 1; weight2 = round5(w * T1_STAGE_RESET_PCT); cycleStart2 = weight2; }
 
-    return { last: { w: last.w, reps: last.reps, logged: true }, periodization: { stage: stage2, weight: weight2, cycleStartWeight: cycleStart2 } };
+    return { last: { w: last.w, reps: last.reps, logged: true }, periodization: { stage: stage2, weight: weight2, cycleStartWeight: cycleStart2, carryKg: carry2 } };
   },
   weekLabel() {
     return null;
